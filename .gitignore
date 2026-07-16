@@ -1,0 +1,7 @@
+data/raw/
+data/parquet/
+!data/raw/.gitkeep
+!data/parquet/.gitkeep
+__pycache__/
+*.pyc
+.env
