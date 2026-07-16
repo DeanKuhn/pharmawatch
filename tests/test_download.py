@@ -1,59 +1,70 @@
 """
 Tests for FAERS quarterly extract downloading.
 
-Uses httpx.MockTransport so no test hits the real FDA server —
-raw downloads are a hard rule (never mutate/never fetch unexpectedly
-in CI), and the real files are ~70MB.
+Uses httpx.MockTransport so no test hits the real FDA server,
+the real files are ~70MB and the server's availability shouldn't
+gate whether our tests pass.
 """
 
 
 import httpx
 import pytest
 
-from src.faers.download import validate_quarter, download_quarter
+from faers.download import validate_quarter, download_quarter, _filename_for_quarter
 
-
-# Fake zip bytes pattern:
-#   b = literal bytes starter
-#   PK\x03\x04 = what every zip file starts with
 FAKE_ZIP_BYTES = b"PK\x03\x04fake zip content for testing"
 
 
 def _client_returning(
-        status_code: int, body: bytes = FAKE_ZIP_BYTES
-    ) -> httpx.Client:
-
+    status_code: int, body: bytes = FAKE_ZIP_BYTES
+) -> httpx.Client:
     """
-    Build an httpx.Client whose requests always get this canned response,
-    without touching the network. Also useful for asserting call count via
-    a request-counting wrapper if a test needs it.
+    Builds an httpx.Client whose requests always get a fake
+    response without touching the FDA network.
     """
-
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(status_code, content=body)
+    return httpx.Client(transport=httpx.MockTransport(handler))
 
+
+def _client_raising(exc: Exception) -> httpx.Client:
+    """
+    Builds an httpx.Client whose requests always raise exc before
+    any response is received (simulates a connection failure).
+    """
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise exc
     return httpx.Client(transport=httpx.MockTransport(handler))
 
 
 class TestValidateQuarter:
-    @pytest.mark.parametrize("raw, expected", {
+    @pytest.mark.parametrize("raw, expected", [
         ("2024q4", "2024q4"),
         ("2024Q4", "2024q4"),
-    })
+    ])
 
     def test_valid_quarters(self, raw, expected):
-        pass
+        assert validate_quarter(raw) == expected
 
-    @pytest.mark.parametrize("bad", {
-        "2024q5",
-        "24q4",
-        "2024-Q4",
-        "not-a-quarter",
-    })
+    @pytest.mark.parametrize("bad", [
+        "2024q5", "24q4", "2024-Q4", "not-a-quarter",
+    ])
 
     def test_rejects_malformed_input(self, bad):
         with pytest.raises(ValueError):
             validate_quarter(bad)
+
+
+class TestFilenameForQuarter:
+    def test_pre_2013_prefix(self):
+        prefix, filename = _filename_for_quarter("2012q4")
+        assert prefix == "aers_ascii_"
+        assert filename == "aers_ascii_2012q4.zip"
+
+    def test_2013_onward_prefix(self):
+        prefix, filename = _filename_for_quarter("2013q1")
+        assert prefix == "faers_ascii_"
+        assert filename == "faers_ascii_2013q1.zip"
 
 
 class TestDownloadQuarter:
@@ -77,21 +88,41 @@ class TestDownloadQuarter:
 
         download_quarter("2024q4", tmp_path, client=client)
 
-        assert calls == []  # never made a request
+        assert calls == []
         assert existing.read_bytes() == b"already here, do not touch"
 
-    def test_no_partial_file_left_on_http_error(self, tmp_path):
-        client = _client_returning(500)
+    @pytest.mark.parametrize("client, expected_exception", [
+        pytest.param(_client_returning(500), httpx.HTTPStatusError, id="http_error"),
+        pytest.param(
+            _client_raising(httpx.ReadError("connection reset mid-stream")),
+            httpx.ReadError,
+            id="stream_interruption",
+        ),
+    ])
 
-        with pytest.raises(httpx.HTTPStatusError):
+    def test_no_partial_file_left_before_any_write(self, tmp_path, client, expected_exception):
+        """
+        Both failure modes here happen before the .tmp file is ever
+        opened, so this just proves no file gets created in either case.
+        """
+        with pytest.raises(expected_exception):
             download_quarter("2024q4", tmp_path, client=client)
 
-        assert list(tmp_path.iterdir()) == []  # no .tmp, no real file
+        assert list(tmp_path.iterdir()) == []
 
-    def test_no_partial_file_left_on_stream_interruption(self, tmp_path):
-        """Simulates the connection dying mid-download, not just a bad status."""
+    def test_removes_partial_file_after_mid_write_failure(self, tmp_path):
+        """
+        Unlike the two tests above, this one fails after the .tmp file
+        has already been opened and had bytes written to it, so it's the one
+        that actually exercises the log-then-delete cleanup path.
+        """
+        class FlakyStream(httpx.SyncByteStream):
+            def __iter__(self):
+                yield b"partial-bytes-before-drop"
+                raise httpx.ReadError("connection reset mid-stream")
+
         def handler(request: httpx.Request) -> httpx.Response:
-            raise httpx.ReadError("connection reset mid-stream")
+            return httpx.Response(200, stream=FlakyStream())
         client = httpx.Client(transport=httpx.MockTransport(handler))
 
         with pytest.raises(httpx.ReadError):

@@ -75,7 +75,13 @@ def download_quarter(
     client = client or httpx.Client()
     url = FAERS_URL_TEMPLATE.format(prefix=prefix, quarter=quarter)
     logger.info(f"Downloading {quarter} from {url}")
-    _stream_to_file(url=url, tmp_path=tmp_path, client=client)
+    try:
+        _stream_to_file(url=url, tmp_path=tmp_path, client=client)
+    except Exception:
+        if tmp_path.exists():
+            logger.error(f"Download failed, removing partial file: {tmp_path})")
+            tmp_path.unlink()
+        raise
 
     tmp_path.replace(final_path)
     logger.info(f"Saved to {final_path}")
