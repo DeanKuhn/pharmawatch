@@ -1,5 +1,4 @@
-"""
-Tests for FAERS quarterly extract downloading.
+"""Tests for FAERS quarterly extract downloading.
 
 Uses httpx.MockTransport so no test hits the real FDA server,
 the real files are ~70MB and the server's availability shouldn't
@@ -18,8 +17,7 @@ FAKE_ZIP_BYTES = b"PK\x03\x04fake zip content for testing"
 def _client_returning(
     status_code: int, body: bytes = FAKE_ZIP_BYTES
 ) -> httpx.Client:
-    """
-    Builds an httpx.Client whose requests always get a fake
+    """Builds an httpx.Client whose requests always get a fake
     response without touching the FDA network.
     """
     def handler(request: httpx.Request) -> httpx.Response:
@@ -28,8 +26,7 @@ def _client_returning(
 
 
 def _client_raising(exc: Exception) -> httpx.Client:
-    """
-    Builds an httpx.Client whose requests always raise exc before
+    """Builds an httpx.Client whose requests always raise exc before
     any response is received (simulates a connection failure).
     """
     def handler(request: httpx.Request) -> httpx.Response:
@@ -101,8 +98,7 @@ class TestDownloadQuarter:
     ])
 
     def test_no_partial_file_left_before_any_write(self, tmp_path, client, expected_exception):
-        """
-        Both failure modes here happen before the .tmp file is ever
+        """Both failure modes here happen before the .tmp file is ever
         opened, so this just proves no file gets created in either case.
         """
         with pytest.raises(expected_exception):
@@ -111,8 +107,7 @@ class TestDownloadQuarter:
         assert list(tmp_path.iterdir()) == []
 
     def test_removes_partial_file_after_mid_write_failure(self, tmp_path):
-        """
-        Unlike the two tests above, this one fails after the .tmp file
+        """Unlike the tests above, this one fails after the .tmp file
         has already been opened and had bytes written to it, so it's the one
         that actually exercises the log-then-delete cleanup path.
         """

@@ -55,8 +55,7 @@ def download_quarter(
     dest_dir: Path,
     client: httpx.Client | None = None,
 ) -> Path:
-    """
-    Download a single FAERS zip for quarter into dest_dir.
+    """Download a single FAERS zip for quarter into dest_dir.
 
     Returns the path to the final file. Skips if the destination already
     exists. Streams to a temp file first, then atomically moves into place
