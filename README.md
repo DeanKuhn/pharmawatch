@@ -37,9 +37,11 @@ like `4204616$ABDOMINAL PAIN$` — splitting on `$` gives 3 fields, not 2.
 Contrast with `faers_ascii_2024q4`, where every table's row field count matches its
 header exactly. Root cause unconfirmed — possibly a column dropped from the header
 at some point without removing it from the export generator. `src/faers/parse.py`
-is scoped to the current (2014q3-onward, see below) layout for Phase 1 and will
-raise rather than silently absorb this if pointed at an older quarter —
-reconciling schema versions across FAERS' history is deferred to a later phase.
+writes each table's columns as declared by that quarter's own header, whatever they
+are, so this file's rows keep their extra unnamed trailing column rather than being
+silently truncated or reconciled at parse time. Reconciling column names/sets
+across FAERS' schema eras into one canonical shape is `src/faers/schema.py`'s job,
+not `parse.py`'s.
 
 ### DEMO/DRUG/REAC column layout changed again at 2014q3 (separately from the filename rename)
 
@@ -57,8 +59,10 @@ later. Per FDA's own "Summary of Changes for the 2014Q3 Quarterly Data Extract" 
 
 So a quarter using the `faers_ascii_` filename prefix (2013q1+) is not sufficient
 evidence that it has the current column layout — 2013q1 through 2014q2 still use
-the pre-2014q3 columns. `src/faers/parse.py` targets 2014q3-onward specifically,
-not just 2013q1-onward.
+the pre-2014q3 columns. That means at least three distinct column-name eras exist
+so far (pre-2013, 2013q1-2014q2, 2014q3-onward), all needing entries in
+`src/faers/schema.py`'s crosswalk — and there may be more not yet found between
+2014q3 and the present.
 
 ### Watch item: FDA rebranding FAERS to AEMS, old download page going stale
 

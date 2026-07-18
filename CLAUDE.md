@@ -16,12 +16,14 @@ feature, not a disclaimer.
 ## Architecture (decided)
 
 Sources (openFDA API + FAERS quarterly extracts)
-  -> raw zone (immutable Parquet, never mutated)
+  -> raw Parquet zone (immutable, object storage)
   -> Postgres staging (dedup, typing, drug name normalization)
-  -> marts (PRR/ROR disproportionality stats)
+  -> dbt marts (PRR/ROR disproportionality stats)
   -> FastAPI service (REST + RAG) -> public frontend on deanslist.dev
 
-- One Postgres instance serves as warehouse, app DB, and vector store (pgvector).
+- Local disk is not the durable store for raw/Parquet data at full-backfill scale (~90 quarters, est. 5-15GB of Parquet, ~30M+ records). The immutable raw zone lives in object storage (Cloudflare R2 preferred for zero egress fees; S3/B2 as fallback — provider not locked yet). Per-quarter flow: download zip locally -> parse to local Parquet -> upload Parquet to object storage -> delete local zip and local Parquet. Object storage is the permanent source of truth; `data/raw/` and `data/parquet/` are working scratch space, not archival, once this stage exists.
+- Postgres holds only what's queried live: dbt mart tables (PRR/ROR aggregates — small, aggregated) and pgvector embeddings. It does NOT hold full report-level staging data long-term — that would blow past free-tier hosting limits (e.g. Neon free tier is 0.5GB) at full-backfill scale. Report-level/raw access (RAG, ad hoc analysis) queries Parquet directly from object storage via DuckDB, not Postgres.
+- Postgres hosting provider is not locked to Neon — still an open decision, revisit once real mart table sizes are known.
 - RAG answers join warehouse stats WITH retrieved drug label chunks — that join is the thesis of the project.
 - Frontend end-state: React island on the Astro site (signal/pharmawatch subdomain), calling FastAPI on Fly.io/Railway with CORS, SSE streaming, per-IP rate limiting. Streamlit is an internal sanity-check tool only, never the product.
 
@@ -30,21 +32,35 @@ Sources (openFDA API + FAERS quarterly extracts)
 Decide tools per phase; do not front-load. Later phases may add PySpark + Delta Lake (justified by full 2004-present backfill, ~30M reports), Airflow, and optional
 Databricks/ADLS deployment targets. Phase 1 uses none of these.
 
+Decided early, out of phase order, because of a hard local-storage constraint (Dean's machine can't hold a ~20GB+ full backfill): object storage (Cloudflare R2 preferred) for the immutable raw Parquet zone, and DuckDB for querying Parquet-on-object-storage directly without loading it into Postgres. This is the Hard Rule 4 record for that decision — implementation (bucket setup, upload/purge step) is future work, not Phase 1.
+
 ## Phase 1 (current)
 
 Goal: one full FAERS quarter downloaded, parsed to Parquet, deduplicated per FDA's documented case-version rules, loaded into a clean Postgres staging schema, with passing tests and the data mess documented.
+
+Decision (2026-07-18): dedup (and everything downstream) must work across FAERS' full
+schema history, 2004-present, not just the 2014q3-onward layout `parse.py` currently
+parses. Older eras use different column names for the same concepts (e.g. `CASE`/`ISR`/
+`FOLL_SEQ`/`GNDR_COD` pre-2014q3 vs. `caseid`/`primaryid`/`caseversion`/`sex` from
+2014q3 on — see README mess log). `src/faers/schema.py` is a new module dedicated to
+mapping each era's raw column names to one canonical set; `parse.py` keeps writing raw,
+verbatim-column Parquet per quarter, and `dedup.py` (and later `load.py`) consume
+`schema.py`'s canonical view rather than raw per-era column names. This replaces the
+earlier "Phase 1 is pinned to 2014q3+, reconciliation is a non-goal" framing in
+`parse.py`'s docstring and the README mess log -- that framing is no longer current.
 
 Stack: Python 3.12, uv, httpx, pyarrow/polars, Postgres via docker-compose, pytest. No orchestrator yet — plain modules, each stage runnable standalone so a future orchestrator can adopt them as tasks.
 
 Layout:
 - src/faers/download.py — fetch quarterly extracts + API samples
-- src/faers/parse.py — extract files -> Parquet
+- src/faers/parse.py — extract files -> Parquet (raw, per-era column names, unmodified)
+- src/faers/schema.py — per-era column-name crosswalk to one canonical schema (2004-present)
 - src/faers/dedup.py — case-version deduplication (highest-stakes code; test-first)
 - src/faers/load.py — Parquet -> Postgres staging
 - sql/staging_schema.sql
 - notebooks/01_explore_mess.ipynb
 - tests/test_dedup.py
-- data/raw/ and data/parquet/ are gitignored and immutable once written
+- data/raw/ and data/parquet/ are gitignored and immutable once written. Phase 1 works with a single quarter, so everything stays local — the upload-to-object-storage-and-purge step (see Architecture) is future work for the full backfill, not needed yet.
 
 ## Hard rules
 

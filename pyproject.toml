@@ -18,7 +18,6 @@ dev = [
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 
-[tool.uv.workspace]
-members = [
-    "polars",
-]
+[tool.pyright]
+typeCheckingMode = "basic"
+extraPaths = ["src"]

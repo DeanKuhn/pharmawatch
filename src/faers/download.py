@@ -4,8 +4,9 @@ import argparse
 import logging
 import re
 from pathlib import Path
+import httpx # type:ignore
 
-import httpx
+from faers.manifest import has_stage, mark_stage
 
 logger = logging.getLogger(__name__)
 
@@ -67,8 +68,8 @@ def download_quarter(
     final_path = dest_dir / filename
     tmp_path = dest_dir / f"{filename}.tmp"
 
-    if final_path.exists():
-        logger.info(f"File already exists: {final_path}")
+    if has_stage(quarter, "downloaded"):
+        logger.info(f"Quarter already downloaded per manifest: {quarter}")
         return final_path
 
     client = client or httpx.Client()
@@ -84,6 +85,7 @@ def download_quarter(
 
     tmp_path.replace(final_path)
     logger.info(f"Saved to {final_path}")
+    mark_stage(quarter, "downloaded")
     return final_path
 
 
