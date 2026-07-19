@@ -44,11 +44,23 @@ def _stream_to_file(url: str, tmp_path: Path, client: httpx.Client) -> None:
                 f.write(chunk)
 
 
-def _filename_for_quarter(quarter: str) -> tuple[str, str]:
-    """Return (prefix, filename) for a validated quarter."""
+def is_legacy_quarter(quarter: str) -> bool:
+    """True for pre-2012q4 quarters (ISR/CASE/FOLL_SEQ identity columns,
+    aers_ascii_ filename prefix), False for 2012q4-onward (primaryid/caseid/
+    caseversion, faers_ascii_ prefix). This exact boundary was mis-derived
+    once already (a year-boundary guess of 2013q1) before being corrected
+    against real downloaded quarters -- see CLAUDE.md's Phase 1 decision
+    record and the README mess log. Kept as the one place this comparison
+    lives so nothing re-derives it a third time.
+    """
     year = int(quarter[:4])
     q = int(quarter[5])
-    prefix = "aers_ascii_" if (year, q) <= (2012, 3) else "faers_ascii_"
+    return (year, q) <= (2012, 3)
+
+
+def _filename_for_quarter(quarter: str) -> tuple[str, str]:
+    """Return (prefix, filename) for a validated quarter."""
+    prefix = "aers_ascii_" if is_legacy_quarter(quarter) else "faers_ascii_"
     return prefix, f"{prefix}{quarter}.zip"
 
 
