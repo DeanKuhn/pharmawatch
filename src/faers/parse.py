@@ -34,34 +34,82 @@ def configure_logging(log_path: Path = Path("logs/parse.log")) -> None:
     )
 
 
-def _log_ragged_lines(
+def _check_ragged_lines(
     raw:bytes, table:str, quarter:str, member:str, warning_path: Path
 ) -> None:
-    """Append each line whose $-count doesn't match the header's to warning_path
-    as one JSON object per line. Diagnostic only, so a plain append (no atomic
-    rename) is fine.
+    """Append one summary record to warning_path for lines with MORE fields
+    than the header -- that's the case _read_table's truncate_ragged_lines
+    silently drops, so these are the only mismatches worth surfacing. Short
+    rows (fewer fields) are ignored entirely: truncate_ragged_lines null-pads
+    those without discarding anything, so there's nothing to review.
+
+    Raises ValueError the moment a surplus row's dropped field(s) are
+    non-empty -- that's real data loss, not the benign trailing-empty-column
+    pattern confirmed (exhaustively, not sampled) for 2004q1's
+    DEMO/DRUG/REAC/OUTC/THER/RPSR (README mess log). A single summary line
+    keeps this reviewable across ~90 quarters instead of one JSON object per
+    row (264,410 for 2004q1's REAC alone under the old per-line version).
+
+    Also raises if any `\\r` or `\\n` byte isn't part of a matched `\\r\\n`
+    line terminator -- every real FAERS line so far (2004q1-2013q1, checked
+    with scripts/check_embedded_newlines.py) ends in CRLF with none loose
+    elsewhere. A bare `\\r` or `\\n` would mean a free-text field (e.g.
+    drugname) has an embedded newline byte, which `_read_table`'s line-based
+    splitting can't tell apart from a real row boundary -- silent
+    misalignment, not caught by the surplus/short-row counts above.
     """
+    if raw.count(b"\r\n") != raw.count(b"\r") or raw.count(b"\r\n") != raw.count(b"\n"):
+        raise ValueError(
+            f"{table} {quarter} ({member}): found a bare \\r or \\n byte not "
+            "part of a \\r\\n line terminator -- likely an embedded newline "
+            "inside a free-text field, needs investigation."
+        )
+
     lines = raw.split(b"\n")
     header, *data_lines = lines
     expected_fields = header.count(b"$") + 1
 
-    warning_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(warning_path, "a") as f:
-        for offset, line in enumerate(data_lines):
-            if not line:
-                continue
-            actual_fields = line.count(b"$") + 1
-            if actual_fields != expected_fields:
-                record = {
+    surplus_rows = 0
+    for offset, line in enumerate(data_lines):
+        if not line:
+            continue
+        fields = line.rstrip(b"\r").split(b"$")
+        actual_fields = len(fields)
+        if actual_fields <= expected_fields:
+            continue
+
+        surplus_rows += 1
+        surplus = fields[expected_fields:]
+        if any(field.strip() for field in surplus):
+            warning_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(warning_path, "a") as f:
+                f.write(json.dumps({
                     "quarter": quarter,
                     "table": table,
                     "member": member,
-                    "line_no": offset + 2,   # +1 for 1-indexing, +1 for header line
-                    "expected_fields": expected_fields,
-                    "actual_fields": actual_fields,
-                    "delta": actual_fields - expected_fields,
-                }
-                f.write(json.dumps(record) + "\n")
+                    "level": "critical",
+                    "line_no": offset + 2,
+                    "surplus": [field.decode(errors="replace") for field in surplus],
+                }) + "\n")
+            raise ValueError(
+                f"{table} {quarter} line {offset + 2} ({member}): "
+                f"truncate_ragged_lines would silently drop non-empty "
+                f"surplus field(s) {surplus!r} - not the benign "
+                "empty-trailing-column pattern, needs investigation."
+            )
+
+    if surplus_rows:
+        warning_path.parent.mkdir(parents=True, exist_ok=True)
+        summary = {
+            "quarter": quarter,
+            "table": table,
+            "member": member,
+            "expected_fields": expected_fields,
+            "surplus_rows": surplus_rows,
+            "total_rows": sum(1 for line in data_lines if line),
+        }
+        with open(warning_path, "a") as f:
+            f.write(json.dumps(summary) + "\n")
 
 
 def _table_member_name(z: zipfile.ZipFile, table: str, quarter: str) -> list[str]:
@@ -97,12 +145,12 @@ def _read_table(raw: bytes, table: str, quarter: str, member: str) -> pl.DataFra
     includes legacy encodings. Column names are stripped of whitespace (a
     stray leading space in faers_ascii_2012q4 DEMO's `' rept_dt'`).
 
-    Ragged lines (row $-count != header's) are logged to WARNING_PATH before
-    parsing, since `truncate_ragged_lines=True` below lets `pl.read_csv`
-    silently absorb them otherwise -- silence is what let the 2004q1
-    undeclared-trailing-field bug (README mess log) go unnoticed.
+    Ragged lines (row $-count != header's) are checked against WARNING_PATH
+    before parsing: logged if the surplus/missing field is benign, raised if
+    `truncate_ragged_lines=True` below would silently drop real data (see
+    `_check_ragged_lines`).
     """
-    _log_ragged_lines(raw, table, quarter, member, WARNING_PATH)
+    _check_ragged_lines(raw, table, quarter, member, WARNING_PATH)
     try:
         df = pl.read_csv(
             io.BytesIO(raw),

@@ -19,14 +19,18 @@ def _load_manifest(manifest_path: Path) -> dict:
     """Load the manifest, or {} if it doesn't exist yet."""
     if manifest_path.exists():
         with open(manifest_path, "r") as f:
-            manifest_dict = json.load(f)
-            return manifest_dict
+            try:
+                return json.load(f)
+            except json.JSONDecodeError:
+                logger.error(f"Manifest at {manifest_path} is corrupted or not valid JSON.")
+                raise
     return {}
 
 
 def _save_manifest(manifest: dict, manifest_path: Path) -> None:
     """Write the manifest to disk atomically (tmp file + replace)."""
     tmp_path = Path(f"{manifest_path}.tmp")
+    tmp_path.parent.mkdir(parents=True, exist_ok=True)
     try:
         with open(tmp_path, "w") as f:
             json.dump(manifest, f, indent=2)

@@ -6,8 +6,8 @@ gate whether our tests pass.
 """
 
 
-import httpx
-import pytest
+import httpx # type:ignore
+import pytest # type:ignore
 
 from faers.download import validate_quarter, download_quarter, _filename_for_quarter
 
@@ -65,7 +65,8 @@ class TestFilenameForQuarter:
 
 
 class TestDownloadQuarter:
-    def test_writes_file_on_success(self, tmp_path):
+    def test_writes_file_on_success(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
         client = _client_returning(200)
         result = download_quarter("2024q4", tmp_path, client=client)
 
@@ -97,20 +98,23 @@ class TestDownloadQuarter:
         ),
     ])
 
-    def test_no_partial_file_left_before_any_write(self, tmp_path, client, expected_exception):
+    def test_no_partial_file_left_before_any_write(self, tmp_path, monkeypatch, client, expected_exception):
         """Both failure modes here happen before the .tmp file is ever
         opened, so this just proves no file gets created in either case.
         """
+        monkeypatch.chdir(tmp_path)
         with pytest.raises(expected_exception):
             download_quarter("2024q4", tmp_path, client=client)
 
         assert list(tmp_path.iterdir()) == []
 
-    def test_removes_partial_file_after_mid_write_failure(self, tmp_path):
+    def test_removes_partial_file_after_mid_write_failure(self, tmp_path, monkeypatch):
         """Unlike the tests above, this one fails after the .tmp file
         has already been opened and had bytes written to it, so it's the one
         that actually exercises the log-then-delete cleanup path.
         """
+        monkeypatch.chdir(tmp_path)
+
         class FlakyStream(httpx.SyncByteStream):
             def __iter__(self):
                 yield b"partial-bytes-before-drop"
