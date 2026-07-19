@@ -62,8 +62,9 @@ def read_all_tables(quarter: str) -> dict[str, list[pl.DataFrame]]:
     """
     quarter = quarter.lower()
     year = int(quarter[:4])
+    q = int(quarter[5])
 
-    prefix = "aers_ascii_" if year < 2013 else "faers_ascii_"
+    prefix = "aers_ascii_" if (year, q) <= (2012, 3) else "faers_ascii_"
     z = zipfile.ZipFile(f"data/raw/{prefix}{quarter}.zip")
 
     FAERS_TABLES = ["DEMO", "DRUG", "REAC", "OUTC", "RPSR", "THER", "INDI"]

@@ -1,11 +1,8 @@
 """Parse a downloaded FAERS quarterly zip into per-table Parquet files.
 
-Writes each table's raw, per-era column names verbatim -- this module does not
-reconcile column-name differences across FAERS schema eras (e.g. `CASE`/`ISR`
-pre-2014q3 vs. `caseid`/`primaryid` from 2014q3 on -- see the README mess log).
-That reconciliation lives in `schema.py`, which maps each era's raw output from
-this module to one canonical schema for `dedup.py` and downstream stages to
-consume.
+Writes each table's raw, per-era column names verbatim; `schema.py` maps
+those per-era names to one canonical schema for `dedup.py` and downstream
+stages to consume.
 """
 
 import io
@@ -14,12 +11,15 @@ import re
 import zipfile
 from pathlib import Path
 import polars as pl # type:ignore
+import json
 
 from faers.manifest import has_stage, mark_stage
 
 logger = logging.getLogger(__name__)
 
 FAERS_TABLES = ["DEMO", "DRUG", "REAC", "OUTC", "RPSR", "THER", "INDI"]
+
+WARNING_PATH = Path("logs/parse_warnings.jsonl")
 
 
 def configure_logging(log_path: Path = Path("logs/parse.log")) -> None:
@@ -34,13 +34,42 @@ def configure_logging(log_path: Path = Path("logs/parse.log")) -> None:
     )
 
 
+def _log_ragged_lines(
+    raw:bytes, table:str, quarter:str, member:str, warning_path: Path
+) -> None:
+    """Append each line whose $-count doesn't match the header's to warning_path
+    as one JSON object per line. Diagnostic only, so a plain append (no atomic
+    rename) is fine.
+    """
+    lines = raw.split(b"\n")
+    header, *data_lines = lines
+    expected_fields = header.count(b"$") + 1
+
+    warning_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(warning_path, "a") as f:
+        for offset, line in enumerate(data_lines):
+            if not line:
+                continue
+            actual_fields = line.count(b"$") + 1
+            if actual_fields != expected_fields:
+                record = {
+                    "quarter": quarter,
+                    "table": table,
+                    "member": member,
+                    "line_no": offset + 2,   # +1 for 1-indexing, +1 for header line
+                    "expected_fields": expected_fields,
+                    "actual_fields": actual_fields,
+                    "delta": actual_fields - expected_fields,
+                }
+                f.write(json.dumps(record) + "\n")
+
+
 def _table_member_name(z: zipfile.ZipFile, table: str, quarter: str) -> list[str]:
     """Return every zip member belonging to `table`, matched case-insensitively.
 
-    A table can be split across multiple files in one quarter (e.g.
-    DRUG24Q4A.TXT and DRUG24Q4B.TXT both belong to DRUG), hence a list rather
-    than a single name. Members are matched by regex search, not exact
-    equality, so an ASCII/ path prefix or a split-file A/B suffix still match.
+    A list, not a single name, because a table can be split across multiple
+    files in one quarter (e.g. DRUG24Q4A.TXT and DRUG24Q4B.TXT both belong to
+    DRUG).
     """
     results = []
     quarter = quarter.lower()
@@ -53,39 +82,56 @@ def _table_member_name(z: zipfile.ZipFile, table: str, quarter: str) -> list[str
     return results
 
 
-def _read_table(raw: bytes, table: str, quarter: str) -> pl.DataFrame:
+def _read_table(raw: bytes, table: str, quarter: str, member: str) -> pl.DataFrame:
     """Parse one FAERS table's raw $-delimited bytes into a DataFrame.
 
-    Every column is read as a string -- FAERS IDs and codes aren't safe to
-    auto-infer (e.g. leading zeros). Real typing belongs in load.py.
+    Every column is read as a string -- FAERS IDs/codes aren't safe to
+    auto-infer (e.g. leading zeros); real typing belongs in load.py.
+
+    `quote_char=None` because FAERS' $-delimited exports are never
+    quoted/escaped, so a literal `"` in a free-text field (e.g. `"VITAMINS"
+    (NOS)`) is just a character -- treating it as a quote breaks the parse
+    partway through (README mess log, faers_ascii_2012q4 DRUG).
+    `encoding="utf8-lossy"` swaps invalid bytes for the replacement character
+    instead of raising, since decades of manually-entered free text plausibly
+    includes legacy encodings. Column names are stripped of whitespace (a
+    stray leading space in faers_ascii_2012q4 DEMO's `' rept_dt'`).
+
+    Ragged lines (row $-count != header's) are logged to WARNING_PATH before
+    parsing, since `truncate_ragged_lines=True` below lets `pl.read_csv`
+    silently absorb them otherwise -- silence is what let the 2004q1
+    undeclared-trailing-field bug (README mess log) go unnoticed.
     """
+    _log_ragged_lines(raw, table, quarter, member, WARNING_PATH)
     try:
-        return pl.read_csv(
+        df = pl.read_csv(
             io.BytesIO(raw),
             separator="$",
             infer_schema=False,
             infer_schema_length=0,
             truncate_ragged_lines=True,
+            quote_char=None,
+            encoding="utf8-lossy",
         )
     except pl.exceptions.ComputeError as e:
         raise ValueError(f"Failed to parse {table} for {quarter}: {e}") from e
+    return df.rename({c: c.strip() for c in df.columns if c != c.strip()})
 
 
 def parse_quarter(z: Path, dest_dir: Path) -> dict[str, Path]:
     """Parse every FAERS table out of the zip at `z` into Parquet files under
     dest_dir/<quarter>/<table>.parquet.
 
-    `quarter` is derived from the zip's filename. Skips a table if the
-    manifest already marks it "parsed", so a re-run after a partial failure
+    `quarter` is derived from the zip's filename. Skips a table already
+    marked "parsed" in the manifest, so a re-run after a partial failure
     doesn't redo tables that already succeeded -- even if the Parquet file
-    itself has since been uploaded and deleted locally. Each Parquet file is
-    written to a
-    `.tmp` sibling and atomically renamed into place, so a crash or error
-    mid-write can never leave a corrupt or partial file at `dest_path`.
+    has since been uploaded and deleted locally. Each Parquet file is written
+    to a `.tmp` sibling and atomically renamed into place, so a crash
+    mid-write can never leave a corrupt/partial file at `dest_path`.
 
     Raises ValueError if a table has no matching zip member -- an empty
-    match is far more likely to mean the filename pattern is wrong for this
-    quarter than a genuine missing table, and that should fail loudly rather
+    match far more likely means the filename pattern is wrong for this
+    quarter than a genuinely missing table, and should fail loudly rather
     than silently produce an incomplete dataset.
     """
     quarter = z.stem.removeprefix("aers_ascii_").removeprefix("faers_ascii_")
@@ -126,7 +172,7 @@ def parse_quarter(z: Path, dest_dir: Path) -> dict[str, Path]:
                 logger.error(f"No files found for {table} in {quarter}")
                 raise ValueError(f"No files found for {table} in {quarter}")
 
-            df = pl.concat([_read_table(zf.read(m), table, quarter) for m in members])
+            df = pl.concat([_read_table(zf.read(m), table, quarter, m) for m in members])
 
             dest_path.parent.mkdir(parents=True, exist_ok=True)
             tmp_path = dest_path.with_name(dest_path.name + ".tmp")
@@ -134,8 +180,9 @@ def parse_quarter(z: Path, dest_dir: Path) -> dict[str, Path]:
                 df.write_parquet(tmp_path)
             except Exception:
                 if tmp_path.exists():
-                    logger.error(f"Write failed for {table} {quarter}, \
-                                 removing partial file: {tmp_path}")
+                    logger.error(
+                        f"Write failed for {table} {quarter}, removing partial file: {tmp_path}"
+                    )
                     tmp_path.unlink()
                 raise
             tmp_path.replace(dest_path)

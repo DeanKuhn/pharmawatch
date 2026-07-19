@@ -47,7 +47,8 @@ def _stream_to_file(url: str, tmp_path: Path, client: httpx.Client) -> None:
 def _filename_for_quarter(quarter: str) -> tuple[str, str]:
     """Return (prefix, filename) for a validated quarter."""
     year = int(quarter[:4])
-    prefix = "aers_ascii_" if year < 2013 else "faers_ascii_"
+    q = int(quarter[5])
+    prefix = "aers_ascii_" if (year, q) <= (2012, 3) else "faers_ascii_"
     return prefix, f"{prefix}{quarter}.zip"
 
 

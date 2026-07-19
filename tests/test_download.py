@@ -53,15 +53,15 @@ class TestValidateQuarter:
 
 
 class TestFilenameForQuarter:
-    def test_pre_2013_prefix(self):
-        prefix, filename = _filename_for_quarter("2012q4")
+    def test_pre_cutover_prefix(self):
+        prefix, filename = _filename_for_quarter("2012q3")
         assert prefix == "aers_ascii_"
-        assert filename == "aers_ascii_2012q4.zip"
+        assert filename == "aers_ascii_2012q3.zip"
 
-    def test_2013_onward_prefix(self):
-        prefix, filename = _filename_for_quarter("2013q1")
+    def test_cutover_onward_prefix(self):
+        prefix, filename = _filename_for_quarter("2012q4")
         assert prefix == "faers_ascii_"
-        assert filename == "faers_ascii_2013q1.zip"
+        assert filename == "faers_ascii_2012q4.zip"
 
 
 class TestDownloadQuarter:

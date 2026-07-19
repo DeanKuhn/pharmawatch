@@ -8,19 +8,21 @@ See CLAUDE.md for architecture and phase plan.
 
 Data quality issues discovered in FAERS/openFDA, with examples. Updated as we find them.
 
-### FAERS quarterly extract filename prefix changed at 2013q1
+### FAERS quarterly extract filename prefix changed at 2012q4
 
-Files for 2004q1 through 2012q4 are named `aers_ascii_{quarter}.zip`; 2013q1 onward are
+Files for 2004q1 through 2012q3 are named `aers_ascii_{quarter}.zip`; 2012q4 onward are
 named `faers_ascii_{quarter}.zip`. Root cause: FDA renamed the underlying system from
 AERS (Adverse Event Reporting System) to FAERS around that time, and the extract file
 naming carried the rebrand. Undocumented on the download page itself — only visible by
-looking at the actual file list.
+looking at the actual file list. Note the cutover does not land on a year boundary —
+it's mid-year 2012, not the 2013q1 January boundary an earlier version of this doc
+(and the code) assumed.
 
-Example: `aers_ascii_2012q4.zip` vs. `faers_ascii_2013q1.zip`.
+Example: `aers_ascii_2012q3.zip` vs. `faers_ascii_2012q4.zip`.
 
-`src/faers/download.py`'s `_filename_for_quarter()` picks the right prefix based on year
-(the cutover happens to land exactly on a year boundary, so `year < 2013` is sufficient —
-this would need revisiting if a future undocumented quirk didn't align so cleanly).
+`src/faers/download.py`'s `_filename_for_quarter()` and `src/faers/read_zip.py`'s
+`read_all_tables()` pick the right prefix by comparing `(year, quarter_num) <= (2012, 3)`,
+not by year alone.
 
 ### Old (pre-2013) quarters: undeclared trailing field in several tables
 
@@ -43,6 +45,16 @@ silently truncated or reconciled at parse time. Reconciling column names/sets
 across FAERS' schema eras into one canonical shape is `src/faers/schema.py`'s job,
 not `parse.py`'s.
 
+**Validated** via `_log_ragged_lines` (`parse.py`), which scans each raw table's
+lines for a `$`-count mismatch against its header and appends every mismatch to
+`logs/parse_warnings.jsonl` before `pl.read_csv` runs (needed because
+`truncate_ragged_lines=True` lets Polars silently absorb ragged rows rather than
+error, which is exactly what let this bug go unnoticed originally). Running it
+against a real `2004q1` parse: every single row in DEMO (65,902), DRUG (235,361),
+OUTC (57,592), REAC (264,410), RPSR (78,306), and THER (84,964) is flagged with
+`delta: +1` -- and INDI produces zero warnings, exactly matching the "same defect,
+just invisible" explanation above.
+
 ### DEMO/DRUG/REAC column layout changed again at 2014q3 (separately from the filename rename)
 
 The 2013q1 cutover only renamed the zip/file prefix (`aers_ascii_` → `faers_ascii_`);
@@ -57,12 +69,46 @@ later. Per FDA's own "Summary of Changes for the 2014Q3 Quarterly Data Extract" 
   nearly every 2024q4 REAC row we sampled: rechallenge is rare, not that the
   field is unused.
 
-So a quarter using the `faers_ascii_` filename prefix (2013q1+) is not sufficient
-evidence that it has the current column layout — 2013q1 through 2014q2 still use
-the pre-2014q3 columns. That means at least three distinct column-name eras exist
-so far (pre-2013, 2013q1-2014q2, 2014q3-onward), all needing entries in
-`src/faers/schema.py`'s crosswalk — and there may be more not yet found between
-2014q3 and the present.
+So a quarter using the `faers_ascii_` filename prefix is not sufficient evidence
+that it has the current *full* column set — the earliest `faers_ascii_` quarters
+are missing the columns listed above. But confirmed against real downloaded
+samples across six quarters (`2008q1`, `2012q3`, `2012q4`, `2013q1`, `2014q2`,
+`2019q1`, `2024q4`): the *identity* columns (`primaryid`/`caseid`/`caseversion`)
+flip to the modern names at exactly the same quarter as the filename-prefix
+cutover — `2012q3` (`ISR`/`CASE`/`FOLL_SEQ`) vs. `2012q4`
+(`primaryid`/`caseid`/`caseversion`) — not a separate, later boundary. `2008q1`
+and `2012q3` are column-for-column identical, confirming the pre-2012q4 era is
+uniform at least back to 2008, and `2019q1`/`2024q4` are column-for-column
+identical, confirming no further drift since 2014q3. So there is exactly **one**
+identity-schema boundary that matters for `dedup.py`'s case-grouping: pre-2012q4
+(`ISR`/`CASE`/`FOLL_SEQ`, `aers_ascii_` prefix) vs. 2012q4-onward
+(`primaryid`/`caseid`/`caseversion`, `faers_ascii_` prefix) — the same boundary
+documented above for the filename-prefix cutover. The 2014q3 column additions
+above are a separate, smaller concern for `src/faers/schema.py`'s crosswalk --
+extra optional columns to map, not an identity-column rename.
+
+### faers_ascii_2012q4: unescaped quote breaks DRUG parse
+
+`faers_ascii_2012q4`'s DRUG table has a free-text `drugname` value containing a
+literal, unescaped `"` — `"VITAMINS" (NOS)`. Polars' CSV reader treats `"` as a
+quote character by default, so it misinterprets the rest of the row/file as
+being inside an open quote and aborts with a `ComputeError`. `2012q3` (one
+quarter earlier) parses cleanly, so this is quarter-specific free-text content,
+not a structural schema difference. Since FAERS' `$`-delimited files were never
+meant to use CSV-style quote-escaping, fixed in `_read_table`'s `pl.read_csv`
+call via `quote_char=None`, to stop treating `"` as special. Re-verified against
+a fresh parse of `2012q4`: all 7/7 tables now parse, including DRUG and REAC
+(REAC previously never even got attempted, since DRUG failed first in the
+table loop).
+
+### faers_ascii_2012q4: stray leading space in a DEMO column name
+
+`faers_ascii_2012q4`'s DEMO header has a literal leading space in one column
+name: `' rept_dt'` instead of `'rept_dt'`. Confirmed isolated to this one
+quarter -- `2013q1` (one quarter later) has the clean `'rept_dt'` name, and nothing else in the sampled column lists shows the same defect. A likely
+one-off export/header generation glitch specific to that quarter's file, not a
+recurring pattern. Fixed in `_read_table` by stripping whitespace from every
+column name after read; re-verified against a fresh parse of `2012q4`.
 
 ### Watch item: FDA rebranding FAERS to AEMS, old download page going stale
 

@@ -40,14 +40,24 @@ Goal: one full FAERS quarter downloaded, parsed to Parquet, deduplicated per FDA
 
 Decision (2026-07-18): dedup (and everything downstream) must work across FAERS' full
 schema history, 2004-present, not just the 2014q3-onward layout `parse.py` currently
-parses. Older eras use different column names for the same concepts (e.g. `CASE`/`ISR`/
-`FOLL_SEQ`/`GNDR_COD` pre-2014q3 vs. `caseid`/`primaryid`/`caseversion`/`sex` from
-2014q3 on — see README mess log). `src/faers/schema.py` is a new module dedicated to
-mapping each era's raw column names to one canonical set; `parse.py` keeps writing raw,
-verbatim-column Parquet per quarter, and `dedup.py` (and later `load.py`) consume
-`schema.py`'s canonical view rather than raw per-era column names. This replaces the
-earlier "Phase 1 is pinned to 2014q3+, reconciliation is a non-goal" framing in
-`parse.py`'s docstring and the README mess log -- that framing is no longer current.
+parses. `src/faers/schema.py` is a new module dedicated to mapping each era's raw
+column names to one canonical set; `parse.py` keeps writing raw, verbatim-column
+Parquet per quarter, and `dedup.py` (and later `load.py`) consume `schema.py`'s
+canonical view rather than raw per-era column names. This replaces the earlier
+"Phase 1 is pinned to 2014q3+, reconciliation is a non-goal" framing in `parse.py`'s
+docstring and the README mess log -- that framing is no longer current.
+
+Verified against real downloaded quarters (2004q1, 2008q1, 2012q3, 2012q4, 2013q1,
+2014q2, 2019q1, 2024q4) that there is exactly **one** identity-column boundary that
+matters for dedup's case-grouping, and it coincides exactly with the filename-prefix
+cutover (see README mess log): pre-2012q4 (`ISR`/`CASE`/`FOLL_SEQ`, `aers_ascii_`
+prefix) vs. 2012q4-onward (`primaryid`/`caseid`/`caseversion`, `faers_ascii_` prefix,
+unchanged through 2024q4). An earlier pass at this wrongly placed the boundary at
+2013q1 -- both the filename cutover and the identity-column rename actually land at
+2012q3->2012q4, a mid-year boundary, not a year boundary. The 2014q3 column additions
+(`SEX`/`AUTH_NUM`/`LIT_REF`/`AGE_GRP`/`PROD_AI`/`DRUG_REC_ACT` -- see README mess log)
+are extra descriptive columns layered on top of that already-modern identity schema,
+not a second identity-column rename.
 
 Stack: Python 3.12, uv, httpx, pyarrow/polars, Postgres via docker-compose, pytest. No orchestrator yet — plain modules, each stage runnable standalone so a future orchestrator can adopt them as tasks.
 
