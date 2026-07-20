@@ -29,8 +29,8 @@ def configure_logging(log_path: Path = Path("logs/parse.log")) -> None:
         format="%(asctime)s %(levelname)s %(message)s",
         handlers=[
             logging.FileHandler(log_path),
-            logging.StreamHandler(),
-        ],
+            logging.StreamHandler()
+        ]
     )
 
 

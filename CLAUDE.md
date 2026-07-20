@@ -59,6 +59,20 @@ unchanged through 2024q4). An earlier pass at this wrongly placed the boundary a
 are extra descriptive columns layered on top of that already-modern identity schema,
 not a second identity-column rename.
 
+Decision (2026-07-19): `dedup.py`'s case-version dedup is written quarter-agnostic
+from the start, not scoped to a single quarter. A case's initial report and its
+follow-up can land in different quarterly extracts, so cross-quarter dedup is the
+real use case, not an edge case -- single-quarter dedup is nearly useless on its
+own. Mechanically this costs nothing extra: `keep_primaryids`/`apply_dedup` key
+purely on `primaryid`/`caseid`/`caseversion` (assumed globally unique across all of
+FAERS, not per-quarter) and never reference which quarter a row came from. Cross-
+quarter dedup is therefore just the caller's choice of input -- `pl.concat()`ing
+DEMO (and, at filter time, each other table) across however many parsed quarters
+are on hand before calling `dedup.py`, versus passing a single quarter's tables.
+This does not by itself change Phase 1's actual pipeline run, which still processes
+one quarter end-to-end; it only means `dedup.py` won't need rework when a
+multi-quarter loader shows up.
+
 Stack: Python 3.12, uv, httpx, pyarrow/polars, Postgres via docker-compose, pytest. No orchestrator yet — plain modules, each stage runnable standalone so a future orchestrator can adopt them as tasks.
 
 Layout:
