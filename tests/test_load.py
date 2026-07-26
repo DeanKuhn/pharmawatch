@@ -17,18 +17,16 @@ UNUSED_R2_CONFIG = R2Config(
 
 class TestLoadTablesAcrossQuarters:
     def test_df_concat_shape_success(self, tmp_path):
-        """2010q1's demo.parquet has no lit_ref column at all -- it's a real
-        2014q3+-only addition (schema.py's DESCRIPTIVE_RENAME docstring) with
-        no legacy equivalent to rename from, not a missing-value case.
-        pl.concat(how="diagonal") must fill that gap with null rather than
-        erroring on the two quarters' mismatched schemas.
+        """2010q1's demo has no lit_ref column at all (real 2014q3+ addition,
+        not a missing-value case). pl.concat(how="diagonal") must fill the
+        gap with null rather than erroring on the mismatched schemas.
         """
         _write_quarter_parquet(tmp_path, "2010q1", "demo",
             pl.DataFrame({"primaryid": [1], "caseid": [1]}))
         _write_quarter_parquet(tmp_path, "2019q1", "demo",
             pl.DataFrame({"primaryid": [2], "caseid": [2], "lit_ref": ["Smith et al 2015"]}))
 
-        result = load_table_across_quarters("demo", ["2010q1", "2019q1"], tmp_path, UNUSED_R2_CONFIG)
+        result = load_table_across_quarters("demo", ["2010q1", "2019q1"], tmp_path, UNUSED_R2_CONFIG).collect()
 
         assert result.height == 2
         assert set(result.columns) == {"primaryid", "caseid", "lit_ref"}
@@ -36,10 +34,9 @@ class TestLoadTablesAcrossQuarters:
         assert result.filter(pl.col("primaryid") == 2)["lit_ref"].to_list() == ["Smith et al 2015"]
 
     def test_missing_local_quarter_falls_back_to_r2_raw(self, tmp_path, monkeypatch):
-        """2010q1's demo.parquet was deleted locally after an earlier sync already
-        pushed it to R2's raw/ zone (the normal "local is scratch" lifecycle).
-        This quarter must still be fetched -- from R2, not skipped or errored --
-        since dedup needs every quarter present on every run.
+        """2010q1's local file was deleted after an earlier sync pushed it to
+        R2's raw/ zone. It must still be fetched, not skipped or errored --
+        dedup needs every quarter present on every run.
         """
         _write_quarter_parquet(tmp_path, "2019q1", "demo",
             pl.DataFrame({"primaryid": [2], "caseid": [2]}))
@@ -53,11 +50,29 @@ class TestLoadTablesAcrossQuarters:
 
         monkeypatch.setattr("faers.load.download_parquet", fake_download_parquet)
 
-        result = load_table_across_quarters("demo", ["2010q1", "2019q1"], tmp_path, UNUSED_R2_CONFIG)
+        result = load_table_across_quarters("demo", ["2010q1", "2019q1"], tmp_path, UNUSED_R2_CONFIG).collect()
 
         assert fetched_keys == ["faers/raw/2010q1/demo.parquet"]
         assert result.height == 2
         assert set(result["primaryid"].to_list()) == {1, 2}
+
+    def test_local_file_is_scanned_lazily_not_read_eagerly(self, tmp_path, monkeypatch):
+        """The whole point of this change: reading 89 quarters x 7 tables
+        eagerly at once is what OOM-killed a real sync run. pl.read_parquet
+        must never be called for a quarter whose local file is present --
+        only pl.scan_parquet, so the caller controls when/how much actually
+        gets materialized.
+        """
+        _write_quarter_parquet(tmp_path, "2019q1", "demo",
+            pl.DataFrame({"primaryid": [1], "caseid": [1]}))
+
+        def fail_if_called(*args, **kwargs):
+            raise AssertionError("pl.read_parquet should not be called for a present local file")
+
+        monkeypatch.setattr("faers.load.pl.read_parquet", fail_if_called)
+
+        result = load_table_across_quarters("demo", ["2019q1"], tmp_path, UNUSED_R2_CONFIG).collect()
+        assert result["primaryid"].to_list() == [1]
 
 
 def _write_quarter_parquet(parquet_dir, quarter: str, table: str, df: pl.DataFrame) -> None:
@@ -75,18 +90,13 @@ def _write_minimal_child_tables(parquet_dir, quarter: str, primaryid: int) -> No
 
 @pytest.fixture
 def uploaded(monkeypatch, tmp_path):
-    """Records every (key, df) sync_quarters_to_r2 would otherwise send to
-    R2, instead of touching the network.
+    """Records every (key, df) sync_quarters_to_r2 would upload, instead of
+    touching the network.
 
-    Also chdir's into tmp_path -- manifest.py's has_stage/mark_stage default
-    to the *relative* path "data/manifest.json", and sync_quarters_to_r2
-    calls them with no override. Without this, every test in
-    TestSyncQuartersToR2 would write real uploaded_raw entries into the
-    real project manifest (this happened once already -- see the
-    2004q1/2004q2/2019q1/2019q2 cleanup). Requesting tmp_path here (the same
-    function-scoped object pytest hands the test itself) means any test
-    depending on this fixture gets the chdir for free, without needing to
-    remember to add it per-test.
+    Also chdir's into tmp_path: has_stage/mark_stage default to the relative
+    path "data/manifest.json", so without this every test here would write
+    real entries into the project manifest (happened once -- see the
+    2004q1/2004q2/2019q1/2019q2 cleanup).
     """
     monkeypatch.chdir(tmp_path)
     store: dict[str, pl.DataFrame] = {}
@@ -98,8 +108,8 @@ def uploaded(monkeypatch, tmp_path):
 
 @pytest.fixture
 def upload_call_counts(monkeypatch, tmp_path):
-    """Counts how many times upload_parquet was called per key. See
-    `uploaded` above for why this also chdir's into tmp_path.
+    """Counts upload_parquet calls per key. See `uploaded` above for why
+    this also chdir's into tmp_path.
     """
     monkeypatch.chdir(tmp_path)
     counts: dict[str, int] = {}
@@ -155,13 +165,10 @@ class TestSyncQuartersToR2:
     def test_missing_local_raw_file_with_unmarked_stage_does_not_reupload(
         self, tmp_path, upload_call_counts, monkeypatch
     ):
-        """Simulates the crash window this branch exists for: a prior run's
-        upload_parquet(demo) succeeded but the process died before mark_stage
-        could record "uploaded_raw" -- so has_stage is False even though the
-        object is already on R2, and the local file is (correctly, per the
-        scratch-disk lifecycle) already gone. The raw-upload loop must confirm
-        the object exists via download_parquet rather than crash on the
-        missing local file or blindly re-upload.
+        """Simulates a crash: upload_parquet(demo) succeeded but the process
+        died before mark_stage recorded "uploaded_raw", and the local file is
+        (correctly) already gone. The raw-upload loop must confirm the object
+        exists via download_parquet rather than crash or blindly re-upload.
         """
         _write_quarter_parquet(tmp_path, "2019q1", "demo",
             pl.DataFrame({"primaryid": [1], "caseid": [1], "caseversion": [1]}))

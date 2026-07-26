@@ -1,9 +1,6 @@
-"""Dedup + schema-canonicalize FAERS Parquet, then sync it to R2 (decision 0005 --
-report-level data lives as Parquet on R2, queried by DuckDB, never a database).
+"""Dedup + schema-canonicalize FAERS Parquet, then sync to R2 (decision 0005).
 
-sync_quarters_to_r2 holds every quarter's DataFrame in memory at once (dedup
-needs all quarters' DEMO simultaneously) -- a single full-archive run, not a
-repeatable incremental sync. See docs/personal/r2_duckdb_motherduck_plan.md.
+Full-archive run, not incremental: dedup needs all quarters in memory at once.
 """
 
 import argparse
@@ -66,24 +63,27 @@ def cast_canonical_types(df: pl.DataFrame, table: str) -> pl.DataFrame:
 
 def load_table_across_quarters(
     table: str, quarters: list[str], parquet_dir: Path, config: R2Config
-) -> pl.DataFrame:
-    """Read + apply_schema `table` for every quarter, concat into one DataFrame.
+) -> pl.LazyFrame:
+    """Read + apply_schema `table` for every quarter, concat into one LazyFrame.
 
-    Every quarter is needed on every run (dedup is global, not incremental --
-    see module docstring), but local disk is scratch space per CLAUDE.md: raw
-    Parquet for older quarters may have been deleted after a previous sync
-    already pushed it to R2's raw/ zone. When the local file is missing, pull
-    it back from R2 instead of raising, so deleting local files never forces
-    a re-download-and-reparse of the original FAERS zip.
+    Lazy, not eager: the full archive is 2.4GB of Parquet-compressed FAERS
+    text data, which routinely expands 5-10x once decompressed -- reading
+    every table's every quarter eagerly at once (the old behavior) OOM-killed
+    a full sync run. scan_parquet + a filter pushed down by the caller
+    (dedup.py's keep_primaryids/apply_dedup) means only the rows actually
+    needed ever get materialized.
+
+    Falls back to R2's raw zone when a local Parquet is missing (deleted
+    after a prior sync), since local disk is scratch space per CLAUDE.md.
     """
     df_list = []
     for q in quarters:
         path = parquet_dir / q / f"{table}.parquet"
         if path.exists():
-            df = pl.read_parquet(path)
+            df = pl.scan_parquet(path)
         else:
             logger.info(f"{q}/{table}.parquet not found locally -- fetching from R2 raw zone.")
-            df = download_parquet(raw_key(table, q), config)
+            df = download_parquet(raw_key(table, q), config).lazy()
         df = apply_schema(df, table, q)
         df_list.append(df)
     return pl.concat(df_list, how="diagonal")
@@ -116,11 +116,6 @@ def sync_quarters_to_r2(
                 upload_parquet(pl.read_parquet(path), raw_key(table, q), config)
                 logger.info(f"Uploaded raw {q}/{table}")
             else:
-                # Local file already gone but "uploaded_raw" was never marked --
-                # the only way both are true is a prior run's upload_parquet
-                # succeeding and then the process dying before mark_stage ran.
-                # The object is already on R2; download_parquet here confirms
-                # that (raises if it's somehow not) instead of re-uploading.
                 download_parquet(raw_key(table, q), config)
                 logger.info(
                     f"{q}/{table} already on R2 (local file gone) -- marking uploaded_raw without re-upload"

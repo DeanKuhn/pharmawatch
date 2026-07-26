@@ -3,20 +3,20 @@ import polars as pl # type:ignore
 from faers.dedup import keep_primaryids, apply_dedup, _pick_richest
 
 
-def _tables_with_empty_children(demo: pl.DataFrame) -> dict[str, pl.DataFrame]:
+def _tables_with_empty_children(demo: pl.DataFrame) -> dict[str, pl.LazyFrame]:
     """Wrap a bare DEMO fixture into the full tables dict keep_primaryids now
     expects. Only usable for tests that never produce a tie -- _pick_richest
     is never invoked, so the child tables just need to exist, not have data.
     """
     empty = pl.DataFrame(schema={"primaryid": pl.Utf8})
     return {
-        "demo": demo,
-        "drug": empty,
-        "reac": empty,
-        "indi": empty,
-        "outc": empty,
-        "rpsr": empty,
-        "ther": empty,
+        "demo": demo.lazy(),
+        "drug": empty.lazy(),
+        "reac": empty.lazy(),
+        "indi": empty.lazy(),
+        "outc": empty.lazy(),
+        "rpsr": empty.lazy(),
+        "ther": empty.lazy(),
     }
 
 
@@ -109,7 +109,7 @@ class TestApplyDedup:
         })
         keep = pl.Series(["100", "102"])
 
-        result = apply_dedup({"drug": drug}, keep)
+        result = apply_dedup({"drug": drug.lazy()}, keep)
         assert result["drug"]["primaryid"].to_list() == ["100", "102"]
 
     def test_drops_exact_duplicate_rows_from_overlapping_quarters(self):
@@ -126,7 +126,7 @@ class TestApplyDedup:
         })
         keep = pl.Series(["100", "101"])
 
-        result = apply_dedup({"demo": demo}, keep)
+        result = apply_dedup({"demo": demo.lazy()}, keep)
         assert result["demo"]["primaryid"].to_list() == ["100", "101"]
 
     def test_duplicate_row_collapse_does_not_merge_distinct_child_rows(self):
@@ -140,7 +140,7 @@ class TestApplyDedup:
         })
         keep = pl.Series(["100"])
 
-        result = apply_dedup({"drug": drug}, keep)
+        result = apply_dedup({"drug": drug.lazy()}, keep)
         assert result["drug"]["drugname"].to_list() == ["ASPIRIN", "IBUPROFEN"]
 
     def test_resolves_conflicting_demo_rows_for_the_same_primaryid(self):
@@ -160,7 +160,7 @@ class TestApplyDedup:
         })
         keep = pl.Series(["100"])
 
-        result = apply_dedup({"demo": demo}, keep)
+        result = apply_dedup({"demo": demo.lazy()}, keep)
         assert result["demo"].height == 1
         assert result["demo"]["mfr_sndr"].to_list() == ["AMGEN"]
 
@@ -175,7 +175,7 @@ class TestApplyDedup:
         })
         keep = pl.Series(["100"])
 
-        result = apply_dedup({"drug": drug}, keep)
+        result = apply_dedup({"drug": drug.lazy()}, keep)
         assert result["drug"].height == 2
 
     def test_filters_multiple_tables_with_many_rows_per_primaryid(self):
@@ -191,7 +191,7 @@ class TestApplyDedup:
         })
         keep = pl.Series(["100"])
 
-        result = apply_dedup({"demo": demo, "drug": drug}, keep)
+        result = apply_dedup({"demo": demo.lazy(), "drug": drug.lazy()}, keep)
         assert result["demo"].height == 1
         assert result["drug"]["primaryid"].to_list() == ["100", "100"]
 
@@ -207,7 +207,7 @@ class TestPickRichest:
         tables["drug"] = pl.DataFrame({
             "primaryid": ["100", "100", "101"],
             "drugname": ["ASPIRIN", "IBUPROFEN", "ASPIRIN"],
-        })
+        }).lazy()
 
         winner = _pick_richest(["100", "101"], tables)
         assert winner == "100"
@@ -227,7 +227,7 @@ class TestPickRichest:
         tables["drug"] = pl.DataFrame({
             "primaryid": ["100", "101"],
             "drugname": ["ASPIRIN", "ASPIRIN"],
-        })
+        }).lazy()
 
         winner = _pick_richest(["100", "101"], tables)
         assert winner == "100"
@@ -245,3 +245,45 @@ class TestPickRichest:
 
         winner = _pick_richest(["100", "101"], _tables_with_empty_children(demo))
         assert winner == "100"
+
+
+class TestPickRichestNeverMaterializesFullChildTable:
+    def test_collect_only_ever_sees_the_tied_subset(self, monkeypatch):
+        """The whole point of _pick_richest taking LazyFrames: real ties are
+        rare (README mess log: ~94 across the entire 22-year archive), so
+        there's no reason a child table the size of drug (~1GB compressed)
+        should ever be fully materialized just to resolve one. Spies on
+        every pl.LazyFrame.collect() call made anywhere during _pick_richest
+        and asserts none of them ever return more rows than tied_pids could
+        possibly match -- this would fail against a regression back to
+        collect-then-filter.
+        """
+        demo = pl.DataFrame(schema={"primaryid": pl.Utf8})
+        tables = _tables_with_empty_children(demo)
+        noise = pl.DataFrame({
+            "primaryid": [str(i) for i in range(10000, 15000)],
+            "drugname": ["NOISE"] * 5000,
+        })
+        tied = pl.DataFrame({
+            "primaryid": ["100", "100", "101"],
+            "drugname": ["ASPIRIN", "IBUPROFEN", "ASPIRIN"],
+        })
+        tables["drug"] = pl.concat([noise, tied]).lazy()
+
+        collected_heights = []
+        real_collect = pl.LazyFrame.collect
+
+        def spying_collect(self, *args, **kwargs):
+            result = real_collect(self, *args, **kwargs)
+            collected_heights.append(result.height)
+            return result
+
+        monkeypatch.setattr(pl.LazyFrame, "collect", spying_collect)
+
+        winner = _pick_richest(["100", "101"], tables)
+
+        assert winner == "100"
+        assert collected_heights, "expected at least one LazyFrame.collect() call"
+        assert all(h <= 3 for h in collected_heights), (
+            f"a collect() materialized more rows than tied_pids could match: {collected_heights}"
+        )

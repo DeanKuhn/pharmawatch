@@ -21,11 +21,15 @@ def configure_logging(log_path: Path = Path("logs/dedup.log")) -> None:
     )
 
 
-def _pick_richest(tied_pids: list[str], tables: dict[str, pl.DataFrame]) -> str:
+def _pick_richest(tied_pids: list[str], tables: dict[str, pl.LazyFrame]) -> str:
+    """tied_pids is always a couple of primaryids at most (README mess log:
+    ~94 genuine ties across the entire 22-year archive) -- filtering before
+    collect() means only those rows ever get materialized out of a child
+    table, not the whole thing (drug alone is ~1GB compressed on disk)."""
     counts = {pid: 0 for pid in tied_pids}
 
     for name in CHILD_TABLES:
-        sub = tables[name].filter(pl.col("primaryid").is_in(tied_pids))
+        sub = tables[name].filter(pl.col("primaryid").is_in(tied_pids)).collect()
         per_pid = sub.group_by("primaryid").len()
         for row in per_pid.iter_rows(named=True):
             counts[row["primaryid"]] += row["len"]
@@ -35,7 +39,7 @@ def _pick_richest(tied_pids: list[str], tables: dict[str, pl.DataFrame]) -> str:
     if len(richest) == 1:
         return richest[0]
 
-    demo_sub = tables["demo"].filter(pl.col("primaryid").is_in(richest))
+    demo_sub = tables["demo"].filter(pl.col("primaryid").is_in(richest)).collect()
     non_null_counts = {
         row["primaryid"]: sum(1 for v in row.values() if v is not None)
         for row in demo_sub.iter_rows(named=True)
@@ -49,10 +53,17 @@ def _pick_richest(tied_pids: list[str], tables: dict[str, pl.DataFrame]) -> str:
     return min(richest2, key=int)
 
 
-def keep_primaryids(tables: dict[str, pl.DataFrame]) -> pl.Series:
-    """Group DEMO by caseid, keep the primaryid of the max-caseversion row per case."""
+def keep_primaryids(tables: dict[str, pl.LazyFrame]) -> pl.Series:
+    """Group DEMO by caseid, keep the primaryid of the max-caseversion row per case.
 
-    demo = tables["demo"]
+    Collects DEMO eagerly right away, unlike the child tables -- the
+    group_by/tie-resolution logic below is inherently row-at-a-time Python
+    control flow (see the tied.iter_rows loop), and DEMO is the smallest
+    table by far (434MB on disk vs. drug's ~1GB), so there's no real memory
+    win in keeping it lazy any longer.
+    """
+
+    demo = tables["demo"].collect()
     demo = demo.with_columns(
         pl.col("caseversion").cast(pl.Int64, strict=False).alias("caseversion_int")
     )
@@ -129,7 +140,7 @@ def _resolve_conflicting_primaryid_rows(demo: pl.DataFrame) -> pl.DataFrame:
 
 
 def apply_dedup(
-    tables: dict[str, pl.DataFrame],
+    tables: dict[str, pl.LazyFrame],
     keep: pl.Series
 ) -> dict[str, pl.DataFrame]:
     """Filter every table to rows whose primaryid is in keep, then drop exact
@@ -154,10 +165,11 @@ def apply_dedup(
     wrong there.
     """
     result = {}
-    for name, df in tables.items():
-        filtered = df.filter(pl.col("primaryid").is_in(keep.to_list())).unique(maintain_order=True)
+    for name, lf in tables.items():
+        original_height = lf.select(pl.len()).collect().item()
+        filtered = lf.filter(pl.col("primaryid").is_in(keep.to_list())).unique(maintain_order=True).collect()
         if name == "demo":
             filtered = _resolve_conflicting_primaryid_rows(filtered)
-        logger.info(f"{name}: kept {filtered.height}/{df.height} rows after dedup")
+        logger.info(f"{name}: kept {filtered.height}/{original_height} rows after dedup")
         result[name] = filtered
     return result
