@@ -10,6 +10,7 @@ import httpx # type:ignore
 import pytest # type:ignore
 
 from faers.download import validate_quarter, download_quarter, _filename_for_quarter
+from faers.manifest import mark_stage
 
 FAKE_ZIP_BYTES = b"PK\x03\x04fake zip content for testing"
 
@@ -88,6 +89,26 @@ class TestDownloadQuarter:
 
         assert calls == []
         assert existing.read_bytes() == b"already here, do not touch"
+
+    def test_redownloads_purged_quarter_despite_downloaded_flag(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        # Simulates the post-purge state: manifest says "downloaded" already
+        # happened, but the local zip is gone (and the quarter is marked
+        # "purged" to say so) -- download_quarter must not trust
+        # "downloaded" alone.
+        mark_stage("2024q4", "downloaded")
+        mark_stage("2024q4", "purged")
+
+        calls = []
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls.append(request)
+            return httpx.Response(200, content=FAKE_ZIP_BYTES)
+        client = httpx.Client(transport=httpx.MockTransport(handler))
+
+        result = download_quarter("2024q4", tmp_path, client=client)
+
+        assert len(calls) == 1
+        assert result.read_bytes() == FAKE_ZIP_BYTES
 
     @pytest.mark.parametrize("client, expected_exception", [
         pytest.param(_client_returning(500), httpx.HTTPStatusError, id="http_error"),

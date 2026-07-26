@@ -87,6 +87,35 @@ documented above for the filename-prefix cutover. The 2014q3 column additions
 above are a separate, smaller concern for `src/faers/schema.py`'s crosswalk --
 extra optional columns to map, not an identity-column rename.
 
+### Column CASE (not just column names/layout) also changes independently of the two known boundaries
+
+Found while writing `load.py`'s deduped output to Neon: every non-identity column is
+ALL-CAPS in legacy quarters (`EVENT_DT`, `MFR_DT`, `IMAGE`, ...) and lowercase from
+2012q4 onward -- `schema.py`'s original `apply_schema` only renamed the specific
+columns in its identity/descriptive maps and never normalized case on everything
+else, so `pl.concat(how="diagonal")` across eras treated e.g. `EVENT_DT` and
+`event_dt` as two separate columns (each null-filled per quarter instead of merged),
+and `staging_schema.sql`'s lowercase Postgres columns rejected the leftover
+uppercase ones outright (`column "IMAGE" of relation "demo" does not exist`).
+
+Fixed by lowercasing every column in `apply_schema`. That fix alone surfaced a
+second, subtler issue: **the column-casing boundary and the semantic-rename
+boundary don't always land on the same quarter.** `GNDR_COD`'s *casing* flips to
+lowercase `gndr_cod` at the 2012q4 identity cutover (confirmed directly:
+`2012q3` has `GNDR_COD`, `2012q4` has `gndr_cod`), but the `GNDR_COD`→`sex` *rename*
+itself doesn't happen until 2014q3 per FDA's own change notice above -- so
+`2012q4`/`2013q1`/`2014q2` all carry a plain lowercase `gndr_cod` that the original
+exact-string rename map (`{"GNDR_COD": "sex"}`) never matched, since it only ever
+compared against the fully-uppercase legacy spelling. Fixed by reordering
+`apply_schema` to lowercase columns *first*, then match the rename map's keys
+case-insensitively (lowercasing both sides) -- this handles casing drift on any
+renamed column without needing to track a third boundary just for case.
+
+Verified against all 7 locally parsed quarters (`2004q1` through `2019q1`): every
+one now has a `sex` column and zero leftover `gndr_cod`/`GNDR_COD`, and a real
+`2004q1`+`2019q1` DEMO concat produces exactly the 28 lowercase columns
+`staging_schema.sql` expects, no duplicates.
+
 ### faers_ascii_2012q4: unescaped quote breaks DRUG parse
 
 `faers_ascii_2012q4`'s DRUG table has a free-text `drugname` value containing a
@@ -109,6 +138,266 @@ quarter -- `2013q1` (one quarter later) has the clean `'rept_dt'` name, and noth
 one-off export/header generation glitch specific to that quarter's file, not a
 recurring pattern. Fixed in `_read_table` by stripping whitespace from every
 column name after read; re-verified against a fresh parse of `2012q4`.
+
+### faers_ascii_2012q4: two more one-off misspelled column names (DRUG, OUTC)
+
+Found while debugging a Postgres COPY failure in `load.py` (traced first to a
+missing type-cast step -- see the `sql/staging_schema.sql` types decision --
+but this second issue was waiting right behind it). `faers_ascii_2012q4`'s
+DRUG table spells its lot-number column `lot_nbr` where every other sampled
+quarter (`2004q1`-`2012q3` as `LOT_NUM`, `2013q1`-`2019q1` as `lot_num`) uses
+`lot_num`; the same quarter's OUTC table spells its outcome-code column
+`outc_code` where every other sampled quarter uses `outc_cod`. Checked all
+other 5 tables (DEMO, INDI, REAC, RPSR, THER) for the same kind of one-off
+2012q4-only rename against `2012q3`/`2013q1` -- none found, so this is
+isolated to these two columns in these two tables, same flavor as the
+`' rept_dt'` leading-space glitch above (one-off export quirk, not a third
+structural boundary alongside the two in `notes/schema_eras.md`).
+
+Decided (2026-07-20): fix via `schema.py`'s new `QUARTER_RENAME` dict, keyed
+by exact quarter string rather than an era boundary, since
+`IDENTITY_RENAME`/`DESCRIPTIVE_RENAME` only branch on `is_legacy_quarter`/
+`is_pre_2014q3_quarter` and neither is true or false uniquely for 2012q4 --
+it needs a rename that applies to exactly one quarter, not one side of a
+boundary.
+
+### event_dt (and occasionally rept_dt/exp_dt/start_dt/end_dt/death_dt) can be partial-precision dates
+
+FAERS date fields aren't reliably full `YYYYMMDD`. In `faers_ascii_2019q1`'s DEMO
+table, `event_dt` is a bare 4-digit year (e.g. `"2014"`) for 32,588 of 413,734 rows
+and a 6-digit year-month (e.g. `"201409"`) for another 39,586 -- only ~65% are full
+8-digit dates. `rept_dt` shows the same shape rarely (9 of 413,734 rows). By
+contrast `fda_dt`, `init_fda_dt`, and `mfr_dt` are consistently full 8-digit dates
+in every quarter sampled so far.
+
+Decided (2026-07-20): `sql/staging_schema.sql` types `fda_dt`/`init_fda_dt`/`mfr_dt`
+as Postgres `date`, but keeps `event_dt`/`rept_dt`/`exp_dt` (DRUG)/`start_dt`/
+`end_dt` (THER)/`death_dt` (legacy DEMO) as `text` rather than casting -- a bare
+`"2014"` cast to `date` would force fabricating a day (e.g. `2014-01-01`) that was
+never actually reported, which is exactly the kind of silent precision loss this
+project's caveats-as-a-feature stance is meant to avoid. Precision is still
+recoverable losslessly from the string's length (4/6/8 chars) whenever a query
+needs it; no separate precision-flag column was added since it's redundant with
+that.
+
+### FOLL_SEQ (pre-2012q4 caseversion) has a handful of genuinely unparseable values
+
+Found while running `load.py` across all 7 locally parsed quarters concatenated:
+30 rows out of 1,405,130 (0.002%), all pre-2012q4, have a `FOLL_SEQ` value that
+isn't a clean integer. `2008q1` (22 rows) is almost entirely a bare `"#"`
+(sometimes `" #"`) -- correlates with that row's `IMAGE` column also ending in
+`"-X"` instead of a numeric suffix (e.g. `FOLL_SEQ="#"` pairs with
+`IMAGE="5599238-X"`), suggesting `"#"` was FDA's own placeholder for a
+withheld/unknown sequence number back then. `2004q1` (8 rows) is messier and
+less consistent: `"#1"`, `"C-"`, `"1A"`, `"#2"`, `"#!"` -- symbols mixed with or
+replacing the digit, no single pattern, just old free-text-field sloppiness.
+Confirmed not a column-shift bug like the quote/ragged-line issues above --
+`ISR`/`CASE`/`I_F_COD`/`IMAGE` are all well-formed for these exact rows.
+
+Decided (2026-07-20): rather than guess at a real value (e.g. stripping `#`
+from `"#1"` to get `1`) -- most of these have no digit to recover at all
+(`"C-"`, bare `"#"`), and for the ones that do, we can't confirm the digit is
+even the intended caseversion rather than coincidental -- `dedup.py`'s
+`keep_primaryids` now casts with `strict=False` and drops any row where
+`caseversion` was non-null but failed to parse, logging a warning naming the
+dropped primaryids. Simpler than a partial-recovery rule, and these cases are
+just excluded from staging rather than crashing the whole multi-quarter load.
+
+### 94 genuine caseid/caseversion ties across different primaryids
+
+Found while running `load.py` across all 7 locally parsed quarters concatenated,
+after fixing the FOLL_SEQ issue above: 144 caseids came back tied at their own max
+caseversion across more than one primaryid. ~50 of those are trivial — the exact
+same primaryid appears verbatim in two overlapping quarterly extracts (e.g.
+`8785296` identical in both `2012q4` and `2013q1`), not a real conflict.
+
+The remaining 94 are genuine: different primaryids, same caseid, same max
+caseversion. 86 are same-quarter ties, and every single one is from a legacy-era
+quarter — `2004q1` (33), `2008q1` (38), `2012q3` (15) — zero from any post-2012q4
+quarter. The other 8 are cross-quarter, and 5 of those land exactly on the
+2012q3→2012q4 identity-column cutover (see the filename-prefix entry above): the
+same real report re-issued under a new primaryid at the `ISR`→`primaryid` rename,
+e.g. caseid `8626466`'s cv=4 tie between `8557338` (from `2012q3`) and `86264664`
+(from `2012q4`).
+
+Spot-checked several pairs across `drug`/`reac`, not just DEMO: in every case one
+primaryid's row is a near-strict superset of the other's — same drugs and reaction
+terms, but more of them, plus more populated DEMO fields (`fda_dt`/`event_dt` set
+vs. null). Not conflicting data, just one thinner duplicate submission of the same
+real-world case — consistent with independent reporters (e.g. a manufacturer and a
+healthcare provider) filing on the same case and landing on the same caseversion
+number by coincidence.
+
+Decided (2026-07-20): rather than special-case the era-cutover ties separately from
+the same-quarter legacy ties, `keep_primaryids` resolves both with one rule —
+"richest record wins." `_pick_richest` sums each tied primaryid's row count across
+all six child tables (drug/reac/indi/outc/rpsr/ther) and keeps the max; if that's
+still tied, it falls back to counting non-null DEMO fields per primaryid.
+
+**Update (2026-07-20, first real run against Neon):** a tie survived both tiebreaks
+— caseid `5958278`, primaryids `8614561`/`8614600` (`2012q3`). Investigated directly:
+every DEMO column is identical between the two rows except `primaryid` itself and
+`image` (which is derived from the primaryid, not independent information) — same
+event/mfr/fda dates, same age/sex/weight, same reporter country. Child tables match
+too: same 8 drugs (different `drug_seq` numbers, different order), same reaction
+(`CATARACT`), same indication (`PSORIASIS`), same outcome, same two `rpsr` codes,
+same therapy start date. This isn't a thinner-vs-richer case like the 94 above — the
+two rows are true duplicates, the same physical report filed under two different
+FDA-assigned primaryids. Since there's no real content difference to lose, added a
+third, final tiebreak: if still tied after richness and non-null-count, `_pick_richest`
+deterministically keeps `min(tied_pids, key=int)` (numeric comparison, not
+lexicographic — same reasoning as the `caseversion` cast elsewhere in `dedup.py`)
+rather than raising. `ValueError` is no longer reachable in `_pick_richest` — every
+real tie found so far resolves via one of the three tiebreaks.
+
+### 4 primaryids with two conflicting DEMO rows -- not overlap duplication, a real identity break
+
+Found while running `load.py` against Neon after fixing the two ties above: the
+first real COPY attempt failed on a Postgres `demo_pkey` violation for primaryid
+`69484696`, which turned out to be the trivial overlap-duplication case already
+described in the "94 genuine ties" entry above (verbatim same row from two
+overlapping quarterly extracts) -- `apply_dedup` was filtering by primaryid
+membership but never actually collapsing exact-duplicate rows, so both copies
+sailed through the filter. Fixed by adding a `.unique()` pass in `apply_dedup`.
+
+Re-running surfaced a second, different `demo_pkey` violation, this time on
+primaryid `86164432`. Not a duplicate `.unique()` could catch -- the two rows are
+identical in every column except one: `mfr_sndr` is `"AMGEN"` in one copy and
+`"GALDERMA"` in the other, same `caseid`/`caseversion`/dates/age/sex throughout.
+Checked the full 7-quarter concatenation for the same pattern: 4 primaryids total
+have this shape (`86164432`, `86344932`, `87894352`, `86320702`), each pair
+differing in exactly one column (`mfr_sndr` in three, `sex` in one), never more.
+All 4 are `2012q4`-era primaryids. This means `primaryid`, which the whole
+2012q4-onward identity scheme assumes is a single unambiguous case identifier
+(see `notes/schema_eras.md`), isn't actually unique in the raw extract for these
+4 real-world cases -- FAERS itself has conflicting field values filed under the
+same primaryid.
+
+Decided (2026-07-20): no way to know from the data alone which value is
+"correct" (nothing marks one submission as the correction), so rather than guess,
+`apply_dedup` keeps the row with fewer nulls (the more complete record) for any
+primaryid still duplicated after the `.unique()` pass, logging a warning naming
+the primaryid. Scoped to `demo` only, via a new `_resolve_conflicting_primaryid_rows`
+helper -- child tables (drug/reac/etc.) legitimately have several rows per
+primaryid, so the same "collapse to one row" step would be wrong there. All 4
+cases resolve cleanly since exactly one side of each pair has the extra populated
+field; a future occurrence where *both* competing rows are equally complete
+would fall back to keeping whichever appeared first in the concatenation order
+(deterministic, not random, but arbitrary as far as "correctness" goes -- worth
+flagging again here if that ever actually happens).
+
+### aers_ascii_2011q2: two DRUG records glued onto one physical line by a missing CRLF
+
+`backfill.py` halted parsing `2011q2` with `_check_ragged_lines` raising on
+`DRUG11Q2.TXT` line 322967: 25 `$`-delimited fields against a 12-column header.
+Not truncated/malformed data -- the line is two complete, back-to-back DRUG
+records for the same case (ISR `7475791`) with the `\r\n` between them missing,
+so they read as one line. First record (`BLEOMYCIN SULFATE`, 12 clean fields)
+plus second record (`DOXORUBICIN`, 13 fields -- FAERS' ordinary one-blank-
+trailing-field) sums to 25, not a clean 2×12 multiple, which is why an initial
+fix attempt keying off "surplus is an exact multiple of the header's field
+count" still raised on the real file. Confirmed isolated: scanned all 7 tables
+in this quarter for any other line with a non-empty surplus field -- this is
+the only one.
+
+Case `7475791` is a real 6-drug combination chemo regimen (bleomycin,
+doxorubicin, dacarbazine, vinblastine, procarbazine, prednisone); before the
+fix, `truncate_ragged_lines=True` would have silently dropped the doxorubicin
+row entirely.
+
+Fixed in `parse.py` via `_split_merged_records`: decomposes a surplus line
+into whole records by consuming header-sized field chunks off the front as
+long as another full record's worth remains, letting the final chunk carry
+the one-blank-trailing-field pattern. Falls back to raising, unchanged, if the
+field count can't be explained this way. Re-verified against `2011q2`'s real
+DRUG table: 754,488 rows (previously 0, since parsing halted), case `7475791`
+now has all 8 of its drug rows. Walkthrough of `parse.py`'s full defensive
+layer, including this fix, is in `docs/personal/parse_walkthrough.md`.
+
+### aers_ascii_2012q1: a literal `$` embedded inside a DEMO field, not a merged record
+
+`backfill.py` halted parsing `2012q1` with `_check_ragged_lines` raising on
+`DEMO12Q1.TXT` line 105917: 25 fields against a 23-column header. Not the
+2011q2 DRUG shape above (two whole records glued by a missing `\r\n`) --
+`_split_merged_records` correctly returned `None` here, since 25 fields
+against 23 expected doesn't decompose into whole extra records.
+
+Traced the raw bytes directly and confirmed via hex dump:
+
+```
+50 24 4a 50 2d 43 55 42 49 53 54 2d 24 45 32 42 30 30 30 30 30 30 30 31 38 32 24
+ P  $  J  P  -  C  U  B  I  S  T  -  $  E  2  B  0  0  0  0  0  0  0  1  8  2  $
+```
+
+The byte before `JP-CUBIST-` (a real column delimiter) and the byte after it
+are both `0x24` -- a literal `$` sitting inside the row's `MFR_NUM` field
+(case ID `8129732`'s E2B manufacturer case number,
+`JP-CUBIST-E2B0000000182`), indistinguishable at the byte level from a real
+delimiter in this unescaped `$`-delimited format. Merging fields 9+10 back
+together makes every downstream field (age, sex, dates, `JAPAN` in the
+country slot) line up exactly with the neighboring rows' shape, confirming
+the diagnosis. Scanned the whole file for the same non-benign-surplus
+pattern: this is the only row affected in this quarter.
+
+Considered a generic auto-repair heuristic first: try every adjacent-field
+merge position, accept one if it doesn't break any `_DT`-suffixed column's
+8-digit-or-blank shape. Tested against this exact row -- **13 of the 22
+possible merge positions pass**, since most FAERS columns are free text or
+blank and this check is too weak to isolate the real one. Guessing wrong
+would corrupt a real case record with no signal it happened, which runs
+against the "raise rather than guess" design `_check_ragged_lines` already
+follows for unexplained surplus.
+
+Fixed instead with a small, explicit, hand-verified patch list --
+`KNOWN_EMBEDDED_DELIMITER_FIXES` in `parse.py`, keyed by
+`(quarter, table, case_id)` (case ID is always column 0, ISR pre-2012q4 /
+primaryid after, regardless of era) -- naming exactly which two fields to
+rejoin. Rejoining with a literal `$` would just recreate the exact byte
+sequence `_read_table`'s `pl.read_csv(separator="$")` re-splits on
+downstream, so the merge uses the fullwidth dollar sign (U+FF04) as a
+placeholder instead -- visually still a `$` in the reconstructed
+`MFR_NUM` value, but a distinct multi-byte UTF-8 sequence that can't
+collide with the ASCII delimiter. A documented, lossy stand-in: the
+original byte is unrecoverable in an unescaped `$`-delimited format.
+`_check_ragged_lines` applies a matching entry only after
+`_split_merged_records` has already ruled out the merged-record case, and
+re-validates the merge actually lands on a benign row shape before using it
+(raising instead if it doesn't, e.g. a stale entry against re-downloaded
+bytes) -- so an unrecognized case ID still raises exactly as before, unchanged.
+Re-verified end-to-end against `2012q1`'s real DEMO table: row for case
+`8129732` now parses with every downstream field correctly aligned
+(`MFR_SNDR`, `AGE_COD`, `REPORTER_COUNTRY`, etc. all matching the
+neighboring rows' shape), and `logs/parse_warnings.jsonl` shows one
+`"repaired"` entry with `reason: "known_embedded_delimiter"`.
+
+### faers_ascii_2017q4: every table uses bare `\n` line endings, not `\r\n`
+
+`backfill.py` halted parsing `2017q4` with `_check_ragged_lines` raising on
+`DEMO17Q4.txt`: "found a bare `\r` or `\n` byte not part of a `\r\n` line
+terminator" -- the same guard that catches a genuine embedded newline inside
+a free-text field (see the 2011q2/2012q1 entries above).
+
+Counted the raw bytes directly: `DEMO17Q4.txt` has 0 `\r` bytes and 327,849
+`\n` bytes -- not a mix, not a stray byte, every single line terminator in
+the file is a bare `\n`. Checked every other table in the same quarter's zip
+(DRUG, REAC, OUTC, RPSR, THER, INDI) -- same pattern, 0 `\r` bytes each.
+Splitting the file on `\n` and counting `$`-fields per row confirms it's
+clean data: all 327,848 data rows have exactly 25 fields, matching the
+header. Every earlier quarter checked uses `\r\n`; this is the first quarter
+observed shipping Unix-style line endings instead of Windows-style.
+
+The guard's invariant (`\r\n` count must equal both `\r` count and `\n`
+count) is only meaningful when `\r` bytes are present at all -- it exists to
+catch a bare `\r` or `\n` byte showing up where the file's own convention
+says every line ends in `\r\n`. A file with zero `\r` bytes isn't ambiguous
+in the same way: every `\n` there is unambiguously a line terminator, not a
+stray byte inside a `\r\n`-terminated field, since there's no `\r\n`
+convention to violate. `_check_ragged_lines` now only runs the pairing check
+when `raw.count(b"\r")` is nonzero; a zero-`\r` file skips straight to the
+existing split/field-count logic, which already handles bare `\n` correctly
+(the per-line `rstrip(b"\r")` is simply a no-op on a file with no `\r`
+bytes). Re-verified end-to-end: `parse_quarter` now completes for `2017q4`
+across all seven tables.
 
 ### Watch item: FDA rebranding FAERS to AEMS, old download page going stale
 

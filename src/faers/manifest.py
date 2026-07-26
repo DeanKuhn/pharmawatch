@@ -68,3 +68,19 @@ def has_stage(
     if table:
         entry = entry.get("tables", {}).get(table, {})
     return stage in entry
+
+
+def clear_stage(
+    quarter: str,
+    stage: str,
+    table: str | None = None,
+    manifest_path: Path = MANIFEST_PATH,
+) -> None:
+    """Remove `stage` from `quarter` (or `table` within it), if present. No-op
+    if it isn't -- callers don't need to check has_stage first."""
+    manifest = _load_manifest(manifest_path)
+    entry = manifest.get(quarter, {})
+    if table:
+        entry = entry.get("tables", {}).get(table, {})
+    entry.pop(stage, None)
+    _save_manifest(manifest, manifest_path)

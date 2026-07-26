@@ -8,3 +8,4 @@ __pycache__/
 logs/
 .vscode/
 .pytest_cache/
+docs/personal/

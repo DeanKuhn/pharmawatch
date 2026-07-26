@@ -58,6 +58,17 @@ def is_legacy_quarter(quarter: str) -> bool:
     return (year, q) <= (2012, 3)
 
 
+def is_pre_2014q3_quarter(quarter: str) -> bool:
+    """True for quarters before the 2014q3 descriptive-column additions
+    (GNDR_COD instead of SEX, no AUTH_NUM/LIT_REF/AGE_GRP/PROD_AI/DRUG_REC_ACT).
+    Separate from is_legacy_quarter's 2012q4 identity-column boundary -- see
+    CLAUDE.md's Phase 1 decision, verified against 2014q2 vs 2019q1 columns.
+    """
+    year = int(quarter[:4])
+    q = int(quarter[5])
+    return (year, q) <= (2014, 2)
+
+
 def _filename_for_quarter(quarter: str) -> tuple[str, str]:
     """Return (prefix, filename) for a validated quarter."""
     prefix = "aers_ascii_" if is_legacy_quarter(quarter) else "faers_ascii_"
@@ -71,9 +82,11 @@ def download_quarter(
 ) -> Path:
     """Download a single FAERS zip for quarter into dest_dir.
 
-    Returns the path to the final file. Skips if the destination already
-    exists. Streams to a temp file first, then atomically moves into place
-    to ensure no partial files remain on crash.
+    Returns the path to the final file. Skips if already marked "downloaded"
+    in the manifest and not since marked "purged" (see manifest.py -- purge
+    invalidates the manifest's usual completed-means-present assumption).
+    Streams to a temp file first, then atomically moves into place to ensure
+    no partial files remain on crash.
     """
     dest_dir.mkdir(parents=True, exist_ok=True)
 
@@ -81,7 +94,7 @@ def download_quarter(
     final_path = dest_dir / filename
     tmp_path = dest_dir / f"{filename}.tmp"
 
-    if has_stage(quarter, "downloaded"):
+    if has_stage(quarter, "downloaded") and not has_stage(quarter, "purged"):
         logger.info(f"Quarter already downloaded per manifest: {quarter}")
         return final_path
 

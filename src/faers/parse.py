@@ -13,13 +13,36 @@ from pathlib import Path
 import polars as pl # type:ignore
 import json
 
-from faers.manifest import has_stage, mark_stage
+from faers.manifest import has_stage, mark_stage, clear_stage
 
 logger = logging.getLogger(__name__)
 
 FAERS_TABLES = ["DEMO", "DRUG", "REAC", "OUTC", "RPSR", "THER", "INDI"]
 
 WARNING_PATH = Path("logs/parse_warnings.jsonl")
+
+# A $-delimited export has no way to escape a literal `$` inside a field, so
+# when one shows up in real data (e.g. an E2B case number like
+# "JP-CUBIST-$E2B0000000182" in MFR_NUM) it reads as an extra column
+# delimiter -- indistinguishable at the byte level from a real one. There's
+# no safe way to *guess* which adjacent pair of fields to rejoin (see README
+# mess log: naive shape-based heuristics pass on the majority of candidate
+# merge points), so each occurrence is investigated by hand and added here,
+# keyed by the row's own case ID (always column 0 -- ISR pre-2012q4,
+# primaryid after -- regardless of era).
+KNOWN_EMBEDDED_DELIMITER_FIXES: dict[tuple[str, str, str], dict[str, tuple[int, int]]] = {
+    ("2012q1", "DEMO", "8129732"): {"merge_fields": (9, 10)},
+}
+
+# Rejoining a known fix's two fields with a literal `$` would just recreate
+# the exact byte sequence `_read_table`'s `pl.read_csv(separator="$")` splits
+# on downstream -- the embedded delimiter would resurface at the same spot.
+# Substituted with the fullwidth dollar sign (U+FF04) instead: visually still
+# a `$` in the reconstructed value, but a distinct multi-byte UTF-8 sequence
+# that `separator="$"` can't match, so the merged field survives re-parsing
+# as one column. A documented, lossy stand-in -- the original byte is
+# unrecoverable in an unescaped $-delimited format.
+_EMBEDDED_DELIMITER_PLACEHOLDER = "＄".encode()
 
 
 def configure_logging(log_path: Path = Path("logs/parse.log")) -> None:
@@ -34,31 +57,64 @@ def configure_logging(log_path: Path = Path("logs/parse.log")) -> None:
     )
 
 
+def _split_merged_records(
+    fields: list[bytes], expected_fields: int
+) -> list[list[bytes]] | None:
+    """Try to decompose one physical line's fields into 2+ whole records --
+    for a missing `\\r\\n` that glued them together (README mess log,
+    2011q2 DRUG). Consumes `expected_fields`-sized chunks off the front
+    while another full record still fits after each one; the final chunk
+    may run one field long (FAERS' routine benign trailing-blank field).
+    Returns None if the count doesn't decompose this way, so the caller
+    falls back to raising rather than guessing a boundary.
+    """
+    records: list[list[bytes]] = []
+    i, n = 0, len(fields)
+    while n - i > expected_fields:
+        remaining = n - i
+        if remaining >= 2 * expected_fields:
+            records.append(fields[i:i + expected_fields])
+            i += expected_fields
+        elif remaining in (expected_fields, expected_fields + 1):
+            records.append(fields[i:n])
+            i = n
+        else:
+            return None
+    if i < n:
+        records.append(fields[i:n])
+    return records if len(records) > 1 else None
+
+
 def _check_ragged_lines(
     raw:bytes, table:str, quarter:str, member:str, warning_path: Path
-) -> None:
-    """Append one summary record to warning_path for lines with MORE fields
-    than the header -- that's the case _read_table's truncate_ragged_lines
-    silently drops, so these are the only mismatches worth surfacing. Short
-    rows (fewer fields) are ignored entirely: truncate_ragged_lines null-pads
-    those without discarding anything, so there's nothing to review.
+) -> bytes:
+    """Return `raw` with any merged-record lines repaired, logging one summary
+    record to warning_path for rows with MORE fields than the header --
+    that's what `_read_table`'s truncate_ragged_lines would otherwise drop
+    silently. Short rows are ignored: those get null-padded, nothing lost.
 
-    Raises ValueError the moment a surplus row's dropped field(s) are
-    non-empty -- that's real data loss, not the benign trailing-empty-column
-    pattern confirmed (exhaustively, not sampled) for 2004q1's
-    DEMO/DRUG/REAC/OUTC/THER/RPSR (README mess log). A single summary line
-    keeps this reviewable across ~90 quarters instead of one JSON object per
-    row (264,410 for 2004q1's REAC alone under the old per-line version).
+    A row with non-empty surplus fields is checked three ways: if it cleanly
+    decomposes into whole records (`_split_merged_records`), it's split and
+    logged as "repaired"; if its case ID has a hand-verified entry in
+    `KNOWN_EMBEDDED_DELIMITER_FIXES` (a literal `$` inside a field, not a
+    merged record), the named fields are rejoined and logged as "repaired";
+    otherwise it's unexplained surplus and raises, since there's no safe way
+    to guess a record boundary. All-empty surplus is FAERS' routine benign
+    trailing-blank-field quirk -- summarized, not raised (see README mess log
+    for all three cases' history).
 
-    Also raises if any `\\r` or `\\n` byte isn't part of a matched `\\r\\n`
-    line terminator -- every real FAERS line so far (2004q1-2013q1, checked
-    with scripts/check_embedded_newlines.py) ends in CRLF with none loose
-    elsewhere. A bare `\\r` or `\\n` would mean a free-text field (e.g.
-    drugname) has an embedded newline byte, which `_read_table`'s line-based
-    splitting can't tell apart from a real row boundary -- silent
-    misalignment, not caught by the surplus/short-row counts above.
+    Also raises on any bare `\\r` not part of a `\\r\\n` pair -- would mean a
+    free-text field has an embedded newline, which breaks this function's
+    line-based splitting in a way the field counts above can't detect. Files
+    with zero `\\r` bytes at all are treated as a whole-file bare-`\\n`
+    terminator convention (seen starting 2017q4, README mess log) rather than
+    a corruption signal -- every `\\n` there is an unambiguous line
+    terminator, and the split/field-count logic below handles it the same
+    way it handles `\\r\\n`.
     """
-    if raw.count(b"\r\n") != raw.count(b"\r") or raw.count(b"\r\n") != raw.count(b"\n"):
+    if raw.count(b"\r") and (
+        raw.count(b"\r\n") != raw.count(b"\r") or raw.count(b"\r\n") != raw.count(b"\n")
+    ):
         raise ValueError(
             f"{table} {quarter} ({member}): found a bare \\r or \\n byte not "
             "part of a \\r\\n line terminator -- likely an embedded newline "
@@ -70,17 +126,68 @@ def _check_ragged_lines(
     expected_fields = header.count(b"$") + 1
 
     surplus_rows = 0
+    repaired_lines: list[bytes] = []
     for offset, line in enumerate(data_lines):
         if not line:
+            repaired_lines.append(line)
             continue
         fields = line.rstrip(b"\r").split(b"$")
         actual_fields = len(fields)
         if actual_fields <= expected_fields:
+            repaired_lines.append(line)
             continue
 
-        surplus_rows += 1
         surplus = fields[expected_fields:]
         if any(field.strip() for field in surplus):
+            records = _split_merged_records(fields, expected_fields)
+            if records is not None:
+                warning_path.parent.mkdir(parents=True, exist_ok=True)
+                with open(warning_path, "a") as f:
+                    f.write(json.dumps({
+                        "quarter": quarter,
+                        "table": table,
+                        "member": member,
+                        "level": "repaired",
+                        "line_no": offset + 2,
+                        "records_recovered": len(records),
+                    }) + "\n")
+                for record in records:
+                    repaired_lines.append(b"$".join(record) + b"\r")
+                continue
+
+            case_id = fields[0].decode(errors="replace")
+            fix = KNOWN_EMBEDDED_DELIMITER_FIXES.get((quarter, table, case_id))
+            if fix is not None:
+                i, j = fix["merge_fields"]
+                merged_field = fields[i] + _EMBEDDED_DELIMITER_PLACEHOLDER + fields[j]
+                merged = fields[:i] + [merged_field] + fields[j + 1:]
+                merged_surplus = merged[expected_fields:]
+                if len(merged) > expected_fields + 1 or any(
+                    field.strip() for field in merged_surplus
+                ):
+                    raise ValueError(
+                        f"{table} {quarter} line {offset + 2} ({member}): "
+                        f"KNOWN_EMBEDDED_DELIMITER_FIXES entry for case "
+                        f"{case_id!r} (merge_fields={fix['merge_fields']}) "
+                        f"doesn't produce a benign row shape -- got "
+                        f"{merged!r}. Entry is stale or wrong, needs "
+                        "re-investigation against the current source bytes."
+                    )
+                warning_path.parent.mkdir(parents=True, exist_ok=True)
+                with open(warning_path, "a") as f:
+                    f.write(json.dumps({
+                        "quarter": quarter,
+                        "table": table,
+                        "member": member,
+                        "level": "repaired",
+                        "line_no": offset + 2,
+                        "reason": "known_embedded_delimiter",
+                        "case_id": case_id,
+                        "merged_fields": list(fix["merge_fields"]),
+                    }) + "\n")
+                repaired_lines.append(b"$".join(merged) + b"\r")
+                continue
+
             warning_path.parent.mkdir(parents=True, exist_ok=True)
             with open(warning_path, "a") as f:
                 f.write(json.dumps({
@@ -98,6 +205,9 @@ def _check_ragged_lines(
                 "empty-trailing-column pattern, needs investigation."
             )
 
+        surplus_rows += 1
+        repaired_lines.append(line)
+
     if surplus_rows:
         warning_path.parent.mkdir(parents=True, exist_ok=True)
         summary = {
@@ -110,6 +220,8 @@ def _check_ragged_lines(
         }
         with open(warning_path, "a") as f:
             f.write(json.dumps(summary) + "\n")
+
+    return header + b"\n" + b"\n".join(repaired_lines)
 
 
 def _table_member_name(z: zipfile.ZipFile, table: str, quarter: str) -> list[str]:
@@ -136,21 +248,17 @@ def _read_table(raw: bytes, table: str, quarter: str, member: str) -> pl.DataFra
     Every column is read as a string -- FAERS IDs/codes aren't safe to
     auto-infer (e.g. leading zeros); real typing belongs in load.py.
 
-    `quote_char=None` because FAERS' $-delimited exports are never
-    quoted/escaped, so a literal `"` in a free-text field (e.g. `"VITAMINS"
-    (NOS)`) is just a character -- treating it as a quote breaks the parse
-    partway through (README mess log, faers_ascii_2012q4 DRUG).
-    `encoding="utf8-lossy"` swaps invalid bytes for the replacement character
-    instead of raising, since decades of manually-entered free text plausibly
-    includes legacy encodings. Column names are stripped of whitespace (a
-    stray leading space in faers_ascii_2012q4 DEMO's `' rept_dt'`).
+    `quote_char=None` since FAERS' $-delimited exports aren't
+    quoted/escaped -- a literal `"` in free text is just a character, not a
+    quote (README mess log, faers_ascii_2012q4 DRUG). `encoding="utf8-lossy"`
+    swaps invalid bytes for the replacement character rather than raising,
+    since decades of free text plausibly includes legacy encodings. Column
+    names are stripped of whitespace (README mess log, same quarter's DEMO).
 
-    Ragged lines (row $-count != header's) are checked against WARNING_PATH
-    before parsing: logged if the surplus/missing field is benign, raised if
-    `truncate_ragged_lines=True` below would silently drop real data (see
-    `_check_ragged_lines`).
+    Ragged lines are checked/repaired against WARNING_PATH before parsing --
+    see `_check_ragged_lines`.
     """
-    _check_ragged_lines(raw, table, quarter, member, WARNING_PATH)
+    raw = _check_ragged_lines(raw, table, quarter, member, WARNING_PATH)
     try:
         df = pl.read_csv(
             io.BytesIO(raw),
@@ -171,7 +279,9 @@ def parse_quarter(z: Path, dest_dir: Path) -> dict[str, Path]:
     dest_dir/<quarter>/<table>.parquet.
 
     `quarter` is derived from the zip's filename. Skips a table already
-    marked "parsed" in the manifest, so a re-run after a partial failure
+    marked "parsed" in the manifest and not since marked "purged" at the
+    quarter level (see manifest.py -- purge invalidates the manifest's usual
+    completed-means-present assumption), so a re-run after a partial failure
     doesn't redo tables that already succeeded -- even if the Parquet file
     has since been uploaded and deleted locally. Each Parquet file is written
     to a `.tmp` sibling and atomically renamed into place, so a crash
@@ -186,9 +296,10 @@ def parse_quarter(z: Path, dest_dir: Path) -> dict[str, Path]:
     logger.info(f"Parsing {quarter} from {z}")
     results: dict[str, Path] = {}
 
+    purged = has_stage(quarter, "purged")
     remaining_tables = [
         table for table in FAERS_TABLES
-        if not has_stage(quarter, "parsed", table=table.lower())
+        if purged or not has_stage(quarter, "parsed", table=table.lower())
     ]
     for table in FAERS_TABLES:
         if table not in remaining_tables:
@@ -239,5 +350,6 @@ def parse_quarter(z: Path, dest_dir: Path) -> dict[str, Path]:
             results[table.lower()] = dest_path
 
     mark_stage(quarter, "parsed")
+    clear_stage(quarter, "purged")
     logger.info(f"Finished {quarter}: {len(results)}/{len(FAERS_TABLES)} tables")
     return results
