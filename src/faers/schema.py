@@ -60,7 +60,7 @@ def canonical_rename_map(table: str, quarter: str) -> dict[str, str]:
     return rename
 
 
-def apply_schema(df: pl.DataFrame, table: str, quarter: str) -> pl.DataFrame:
+def apply_schema(df: pl.DataFrame | pl.LazyFrame, table: str, quarter: str) -> pl.DataFrame | pl.LazyFrame:
     """Rename `df`'s columns to the canonical schema, if needed.
 
     Only renames columns actually present -- e.g. a table that doesn't carry
@@ -83,7 +83,8 @@ def apply_schema(df: pl.DataFrame, table: str, quarter: str) -> pl.DataFrame:
     the rename map's keys case-insensitively (by lowercasing both sides)
     handles this without needing a third boundary just for casing.
     """
-    df = df.rename({c: c.lower() for c in df.columns if c != c.lower()})
+    columns = df.collect_schema().names()
+    df = df.rename({c: c.lower() for c in columns if c != c.lower()})
     rename = {old.lower(): new for old, new in canonical_rename_map(table, quarter).items()}
-    matched = {old: new for old, new in rename.items() if old in df.columns}
+    matched = {old: new for old, new in rename.items() if old in df.collect_schema().names()}
     return df.rename(matched) if matched else df
