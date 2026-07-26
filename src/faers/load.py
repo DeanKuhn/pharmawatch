@@ -112,9 +112,20 @@ def sync_quarters_to_r2(
             if has_stage(q, "uploaded_raw", table):
                 continue
             path = parquet_dir / q / f"{table}.parquet"
-            upload_parquet(pl.read_parquet(path), raw_key(table, q), config)
+            if path.exists():
+                upload_parquet(pl.read_parquet(path), raw_key(table, q), config)
+                logger.info(f"Uploaded raw {q}/{table}")
+            else:
+                # Local file already gone but "uploaded_raw" was never marked --
+                # the only way both are true is a prior run's upload_parquet
+                # succeeding and then the process dying before mark_stage ran.
+                # The object is already on R2; download_parquet here confirms
+                # that (raises if it's somehow not) instead of re-uploading.
+                download_parquet(raw_key(table, q), config)
+                logger.info(
+                    f"{q}/{table} already on R2 (local file gone) -- marking uploaded_raw without re-upload"
+                )
             mark_stage(q, "uploaded_raw", table)
-            logger.info(f"Uploaded raw {q}/{table}")
 
 
 def main() -> None:

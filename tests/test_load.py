@@ -5,6 +5,7 @@ import pytest # type:ignore
 
 from faers.dedup import keep_primaryids, apply_dedup, CHILD_TABLES
 from faers.load import cast_canonical_types, sync_quarters_to_r2, load_table_across_quarters, FAERS_TABLES
+from faers.manifest import has_stage
 from faers.r2 import R2Config
 
 
@@ -150,6 +151,38 @@ class TestSyncQuartersToR2:
 
         assert upload_call_counts["faers/canonical/demo.parquet"] == 2
         assert upload_call_counts["faers/raw/2019q1/demo.parquet"] == 1
+
+    def test_missing_local_raw_file_with_unmarked_stage_does_not_reupload(
+        self, tmp_path, upload_call_counts, monkeypatch
+    ):
+        """Simulates the crash window this branch exists for: a prior run's
+        upload_parquet(demo) succeeded but the process died before mark_stage
+        could record "uploaded_raw" -- so has_stage is False even though the
+        object is already on R2, and the local file is (correctly, per the
+        scratch-disk lifecycle) already gone. The raw-upload loop must confirm
+        the object exists via download_parquet rather than crash on the
+        missing local file or blindly re-upload.
+        """
+        _write_quarter_parquet(tmp_path, "2019q1", "demo",
+            pl.DataFrame({"primaryid": [1], "caseid": [1], "caseversion": [1]}))
+        _write_minimal_child_tables(tmp_path, "2019q1", 1)
+        (tmp_path / "2019q1" / "demo.parquet").unlink()
+
+        download_calls = []
+        monkeypatch.setattr(
+            "faers.load.download_parquet",
+            lambda key, config: download_calls.append(key) or pl.DataFrame(
+                {"primaryid": [1], "caseid": [1], "caseversion": [1]}
+            ),
+        )
+
+        config = R2Config(endpoint_url="unused", access_key_id="unused",
+                        secret_access_key="unused", bucket="unused")
+        sync_quarters_to_r2(["2019q1"], tmp_path, config=config)
+
+        assert "faers/raw/2019q1/demo.parquet" not in upload_call_counts
+        assert download_calls.count("faers/raw/2019q1/demo.parquet") >= 1
+        assert has_stage("2019q1", "uploaded_raw", "demo")
 
 
 class TestCastForStaging:
