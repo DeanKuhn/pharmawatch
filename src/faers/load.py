@@ -1,5 +1,4 @@
 """Dedup + schema-canonicalize FAERS Parquet, then sync to R2 (decision 0005).
-
 Full-archive run, not incremental: dedup needs all quarters in memory at once.
 """
 
@@ -9,7 +8,7 @@ import polars as pl # type:ignore
 from pathlib import Path
 
 from faers.schema import apply_schema
-from faers.dedup import keep_primaryids, apply_dedup, configure_logging
+from faers.dedup import keep_primaryids, dedup_table, configure_logging
 from faers.manifest import mark_stage, has_stage
 from faers.r2 import R2Config, load_r2_config, raw_key, canonical_key, upload_parquet, download_parquet
 
@@ -65,14 +64,6 @@ def load_table_across_quarters(
     table: str, quarters: list[str], parquet_dir: Path, config: R2Config
 ) -> pl.LazyFrame:
     """Read + apply_schema `table` for every quarter, concat into one LazyFrame.
-
-    Lazy, not eager: the full archive is 2.4GB of Parquet-compressed FAERS
-    text data, which routinely expands 5-10x once decompressed -- reading
-    every table's every quarter eagerly at once (the old behavior) OOM-killed
-    a full sync run. scan_parquet + a filter pushed down by the caller
-    (dedup.py's keep_primaryids/apply_dedup) means only the rows actually
-    needed ever get materialized.
-
     Falls back to R2's raw zone when a local Parquet is missing (deleted
     after a prior sync), since local disk is scratch space per CLAUDE.md.
     """
@@ -97,12 +88,18 @@ def sync_quarters_to_r2(
     """Dedup across all quarters, upload the canonical Parquet (overwritten each
     run, no versioning), then upload each quarter's raw Parquet if not
     already marked uploaded_raw.
+
+    Dedups, casts, and uploads one table at a time rather than collecting
+    every table into a dict first -- drug/reac decompressed are big enough
+    that holding all seven tables' full DataFrames live simultaneously is
+    what was actually causing the full-archive OOM. Each df goes out of
+    scope (and is eligible for GC) right after its upload_parquet call.
     """
     tables = {t: load_table_across_quarters(t, quarters, parquet_dir, config) for t in FAERS_TABLES}
     keep = keep_primaryids(tables)
-    deduped = apply_dedup(tables, keep)
 
-    for table, df in deduped.items():
+    for table, lf in tables.items():
+        df = dedup_table(table, lf, keep)
         df = cast_canonical_types(df, table)
         logger.info(f"Uploading canonical {table} ({df.height} rows)...")
         upload_parquet(df, canonical_key(table), config)

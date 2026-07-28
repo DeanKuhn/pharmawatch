@@ -61,9 +61,17 @@ def keep_primaryids(tables: dict[str, pl.LazyFrame]) -> pl.Series:
     control flow (see the tied.iter_rows loop), and DEMO is the smallest
     table by far (434MB on disk vs. drug's ~1GB), so there's no real memory
     win in keeping it lazy any longer.
+
+    Only `.select()`s the 3 columns this function actually touches
+    (primaryid/caseid/caseversion) before collecting, not all ~25 of DEMO's
+    raw string columns -- the descriptive columns (age, sex, reporter_country,
+    etc.) are dead weight here; only `_resolve_conflicting_primaryid_rows`
+    and `_pick_richest`'s tie-break need the full row, and both of those
+    filter down to a handful of primaryids before collecting, so they're
+    fine reading the original (unselected) `tables["demo"]` LazyFrame.
     """
 
-    demo = tables["demo"].collect()
+    demo = tables["demo"].select(["primaryid", "caseid", "caseversion"]).collect()
     demo = demo.with_columns(
         pl.col("caseversion").cast(pl.Int64, strict=False).alias("caseversion_int")
     )
@@ -139,11 +147,8 @@ def _resolve_conflicting_primaryid_rows(demo: pl.DataFrame) -> pl.DataFrame:
     return pl.concat([clean, pl.DataFrame(resolved, schema=demo.schema)], how="vertical")
 
 
-def apply_dedup(
-    tables: dict[str, pl.LazyFrame],
-    keep: pl.Series
-) -> dict[str, pl.DataFrame]:
-    """Filter every table to rows whose primaryid is in keep, then drop exact
+def dedup_table(name: str, lf: pl.LazyFrame, keep: pl.Series) -> pl.DataFrame:
+    """Filter one table to rows whose primaryid is in keep, then drop exact
     duplicate rows.
 
     The duplicates handled here are distinct from keep_primaryids' tie
@@ -163,13 +168,29 @@ def apply_dedup(
     expected to have several rows per primaryid (e.g. multiple drugs on one
     report), so the same "collapse to one row per primaryid" step would be
     wrong there.
+
+    One table at a time and returned immediately (not accumulated into a
+    dict) so the caller can upload and drop each DataFrame before moving to
+    the next -- drug/reac decompressed are big enough that holding all seven
+    tables live at once is what was actually causing the full-archive OOM,
+    not the per-quarter scan (see git history: lazy scans alone didn't fix it).
     """
-    result = {}
-    for name, lf in tables.items():
-        original_height = lf.select(pl.len()).collect().item()
-        filtered = lf.filter(pl.col("primaryid").is_in(keep.to_list())).unique(maintain_order=True).collect()
-        if name == "demo":
-            filtered = _resolve_conflicting_primaryid_rows(filtered)
-        logger.info(f"{name}: kept {filtered.height}/{original_height} rows after dedup")
-        result[name] = filtered
-    return result
+    original_height = lf.select(pl.len()).collect().item()
+    filtered = lf.filter(pl.col("primaryid").is_in(keep.to_list())).unique(maintain_order=True).collect()
+    if name == "demo":
+        filtered = _resolve_conflicting_primaryid_rows(filtered)
+    logger.info(f"{name}: kept {filtered.height}/{original_height} rows after dedup")
+    return filtered
+
+
+def apply_dedup(
+    tables: dict[str, pl.LazyFrame],
+    keep: pl.Series
+) -> dict[str, pl.DataFrame]:
+    """Dict-at-once wrapper around dedup_table, kept for callers (tests) that
+    want every table back together. load.py's real sync path calls
+    dedup_table directly per table instead, since this wrapper holds all
+    seven tables' full DataFrames live simultaneously -- fine for a small
+    test fixture, not for the full archive.
+    """
+    return {name: dedup_table(name, lf, keep) for name, lf in tables.items()}
