@@ -8,6 +8,8 @@ import httpx # type:ignore
 
 from faers.manifest import has_stage, mark_stage
 
+
+# === SETUP ===
 logger = logging.getLogger(__name__)
 
 def configure_logging(log_path: Path = Path("logs/faers_download.log")) -> None:
@@ -22,71 +24,32 @@ def configure_logging(log_path: Path = Path("logs/faers_download.log")) -> None:
     )
 
 
+# === CONSTANTS ===
 FAERS_URL_TEMPLATE = "https://fis.fda.gov/content/Exports/{prefix}{quarter}.zip"
-
 QUARTER_PATTERN = re.compile(r"^\d{4}q[1-4]$", re.IGNORECASE)
 
 
-def validate_quarter(quarter: str) -> str:
-    """Normalize + validate a quarter string like 2024q4."""
-    normalized = quarter.lower()
-    if not QUARTER_PATTERN.match(normalized):
-        raise ValueError(f"Invalid quarter: {quarter!r}, expected format: '2024q4'")
-    return normalized
+# === ENTRY POINT ===
+def main() -> None:
+    configure_logging()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("quarter", help="e.g. 2024q4")
+    parser.add_argument("--dest", type=Path, default=Path("data/raw"))
+    args = parser.parse_args()
+
+    try:
+        path = download_quarter(validate_quarter(args.quarter), args.dest)
+    except Exception:
+        logger.exception("Download failed")
+        raise
 
 
-def _stream_to_file(url: str, tmp_path: Path, client: httpx.Client) -> None:
-    """Stream url's response body to tmp_path in chunks."""
-    with client.stream("GET", url) as response:
-        response.raise_for_status()
-        with open(tmp_path, "wb") as f:
-            for chunk in response.iter_bytes():
-                f.write(chunk)
-
-
-def is_legacy_quarter(quarter: str) -> bool:
-    """True for pre-2012q4 quarters (ISR/CASE/FOLL_SEQ identity columns,
-    aers_ascii_ filename prefix), False for 2012q4-onward (primaryid/caseid/
-    caseversion, faers_ascii_ prefix). This exact boundary was mis-derived
-    once already (a year-boundary guess of 2013q1) before being corrected
-    against real downloaded quarters -- see CLAUDE.md's Phase 1 decision
-    record and the README mess log. Kept as the one place this comparison
-    lives so nothing re-derives it a third time.
-    """
-    year = int(quarter[:4])
-    q = int(quarter[5])
-    return (year, q) <= (2012, 3)
-
-
-def is_pre_2014q3_quarter(quarter: str) -> bool:
-    """True for quarters before the 2014q3 descriptive-column additions
-    (GNDR_COD instead of SEX, no AUTH_NUM/LIT_REF/AGE_GRP/PROD_AI/DRUG_REC_ACT).
-    Separate from is_legacy_quarter's 2012q4 identity-column boundary -- see
-    CLAUDE.md's Phase 1 decision, verified against 2014q2 vs 2019q1 columns.
-    """
-    year = int(quarter[:4])
-    q = int(quarter[5])
-    return (year, q) <= (2014, 2)
-
-
-def _filename_for_quarter(quarter: str) -> tuple[str, str]:
-    """Return (prefix, filename) for a validated quarter."""
-    prefix = "aers_ascii_" if is_legacy_quarter(quarter) else "faers_ascii_"
-    return prefix, f"{prefix}{quarter}.zip"
-
-
+# === MAIN DOWNLOAD FUNCTION ===
 def download_quarter(
-    quarter: str,
-    dest_dir: Path,
-    client: httpx.Client | None = None,
+    quarter: str, dest_dir: Path, client: httpx.Client | None = None,
 ) -> Path:
-    """Download a single FAERS zip for quarter into dest_dir.
-
-    Returns the path to the final file. Skips if already marked "downloaded"
-    in the manifest and not since marked "purged" (see manifest.py -- purge
-    invalidates the manifest's usual completed-means-present assumption).
-    Streams to a temp file first, then atomically moves into place to ensure
-    no partial files remain on crash.
+    """Download a single FAERS zip for quarter into dest_dir. Skips if already
+    marked "downloaded" in the manifest and not since marked "purged."
     """
     dest_dir.mkdir(parents=True, exist_ok=True)
 
@@ -105,7 +68,9 @@ def download_quarter(
         _stream_to_file(url=url, tmp_path=tmp_path, client=client)
     except Exception:
         if tmp_path.exists():
-            logger.error(f"Download failed, removing partial file: {tmp_path})")
+            logger.error(
+                f"Download failed, removing partial file: {tmp_path})"
+            )
             tmp_path.unlink()
         raise
 
@@ -115,18 +80,42 @@ def download_quarter(
     return final_path
 
 
-def main() -> None:
-    configure_logging()
-    parser = argparse.ArgumentParser()
-    parser.add_argument("quarter", help="e.g. 2024q4")
-    parser.add_argument("--dest", type=Path, default=Path("data/raw"))
-    args = parser.parse_args()
+# === QUARTER VALIDATION AND METADATA ===
+def validate_quarter(quarter: str) -> str:
+    """Validates whether quarter argument will work before hitting URL."""
+    normalized = quarter.lower()
+    if not QUARTER_PATTERN.match(normalized):
+        raise ValueError(
+            f"Invalid quarter: {quarter!r}, expected format: '2024q4'"
+        )
+    return normalized
 
-    try:
-        path = download_quarter(validate_quarter(args.quarter), args.dest)
-    except Exception:
-        logger.exception("Download failed")
-        raise
+def _filename_for_quarter(quarter: str) -> tuple[str, str]:
+    """Return (prefix, filename) for a validated quarter."""
+    prefix = "aers_ascii_" if is_legacy_quarter(quarter) else "faers_ascii_"
+    return prefix, f"{prefix}{quarter}.zip"
+
+
+# === CLASSIFICATION HELPERS ===
+def is_legacy_quarter(quarter: str) -> bool:
+    year = int(quarter[:4])
+    q = int(quarter[5])
+    return (year, q) <= (2012, 3)
+
+def is_pre_2014q3_quarter(quarter: str) -> bool:
+    year = int(quarter[:4])
+    q = int(quarter[5])
+    return (year, q) <= (2014, 2)
+
+
+# === LOW-LEVEL UTILITIES ===
+def _stream_to_file(url: str, tmp_path: Path, client: httpx.Client) -> None:
+    """Stream url's response body to tmp_path in chunks."""
+    with client.stream("GET", url) as response:
+        response.raise_for_status()
+        with open(tmp_path, "wb") as f:
+            for chunk in response.iter_bytes():
+                f.write(chunk)
 
 
 if __name__ == "__main__":

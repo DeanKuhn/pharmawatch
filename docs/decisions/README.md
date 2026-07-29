@@ -12,3 +12,4 @@ Architecture, Stack policy, or Phase 1 sections.
 - [0003 — Dedup is quarter-agnostic](0003-dedup-quarter-agnostic.md)
 - [0004 — Staging schema shape + Neon for Postgres](0004-staging-schema-and-neon.md)
 - [0005 — Report-level storage: R2 + DuckDB, marts on MotherDuck](0005-report-storage-duckdb-motherduck.md)
+- [0006 — Cross-quarter union moves from Polars concat to DuckDB](0006-dedup-union-via-duckdb.md)

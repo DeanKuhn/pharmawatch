@@ -6,114 +6,157 @@ stages to consume.
 """
 
 import io
+import json
 import logging
 import re
 import zipfile
 from pathlib import Path
-import polars as pl # type:ignore
-import json
 
-from faers.manifest import has_stage, mark_stage, clear_stage
+import polars as pl  # type:ignore
+
+from faers.manifest import clear_stage, has_stage, mark_stage
 
 logger = logging.getLogger(__name__)
 
+# ===== Constants =====
 FAERS_TABLES = ["DEMO", "DRUG", "REAC", "OUTC", "RPSR", "THER", "INDI"]
-
 WARNING_PATH = Path("logs/parse_warnings.jsonl")
 
-# A $-delimited export has no way to escape a literal `$` inside a field, so
-# when one shows up in real data (e.g. an E2B case number like
-# "JP-CUBIST-$E2B0000000182" in MFR_NUM) it reads as an extra column
-# delimiter -- indistinguishable at the byte level from a real one. There's
-# no safe way to *guess* which adjacent pair of fields to rejoin (see README
-# mess log: naive shape-based heuristics pass on the majority of candidate
-# merge points), so each occurrence is investigated by hand and added here,
-# keyed by the row's own case ID (always column 0 -- ISR pre-2012q4,
-# primaryid after -- regardless of era).
-KNOWN_EMBEDDED_DELIMITER_FIXES: dict[tuple[str, str, str], dict[str, tuple[int, int]]] = {
-    ("2012q1", "DEMO", "8129732"): {"merge_fields": (9, 10)},
+KNOWN_EMBEDDED_DELIMITER_FIXES: \
+    dict[tuple[str, str, str], dict[str, tuple[int, int]]] = {
+    ("2012q1", "DEMO", "8129732"): {"merge_fields": (9, 10)}
 }
-
-# Rejoining a known fix's two fields with a literal `$` would just recreate
-# the exact byte sequence `_read_table`'s `pl.read_csv(separator="$")` splits
-# on downstream -- the embedded delimiter would resurface at the same spot.
-# Substituted with the fullwidth dollar sign (U+FF04) instead: visually still
-# a `$` in the reconstructed value, but a distinct multi-byte UTF-8 sequence
-# that `separator="$"` can't match, so the merged field survives re-parsing
-# as one column. A documented, lossy stand-in -- the original byte is
-# unrecoverable in an unescaped $-delimited format.
 _EMBEDDED_DELIMITER_PLACEHOLDER = "＄".encode()
 
 
+# ===== Setup =====
 def configure_logging(log_path: Path = Path("logs/parse.log")) -> None:
     log_path.parent.mkdir(parents=True, exist_ok=True)
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(message)s",
-        handlers=[
-            logging.FileHandler(log_path),
-            logging.StreamHandler()
-        ]
+        handlers=[logging.FileHandler(log_path), logging.StreamHandler()],
     )
 
 
-def _split_merged_records(
-    fields: list[bytes], expected_fields: int
-) -> list[list[bytes]] | None:
-    """Try to decompose one physical line's fields into 2+ whole records --
-    for a missing `\\r\\n` that glued them together (README mess log,
-    2011q2 DRUG). Consumes `expected_fields`-sized chunks off the front
-    while another full record still fits after each one; the final chunk
-    may run one field long (FAERS' routine benign trailing-blank field).
-    Returns None if the count doesn't decompose this way, so the caller
-    falls back to raising rather than guessing a boundary.
-    """
-    records: list[list[bytes]] = []
-    i, n = 0, len(fields)
-    while n - i > expected_fields:
-        remaining = n - i
-        if remaining >= 2 * expected_fields:
-            records.append(fields[i:i + expected_fields])
-            i += expected_fields
-        elif remaining in (expected_fields, expected_fields + 1):
-            records.append(fields[i:n])
-            i = n
-        else:
-            return None
-    if i < n:
-        records.append(fields[i:n])
-    return records if len(records) > 1 else None
+# ===== Main Function =====
+def parse_quarter(z: Path, dest_dir: Path) -> dict[str, Path]:
+    """Parse every FAERS table from zip into Parquet files."""
+    quarter = z.stem.removeprefix("aers_ascii_").removeprefix("faers_ascii_")
+    logger.info(f"Parsing {quarter} from {z}")
+    results: dict[str, Path] = {}
+
+    purged = has_stage(quarter, "purged")
+    remaining_tables = [
+        table
+        for table in FAERS_TABLES
+        if purged or not has_stage(quarter, "parsed", table=table.lower())
+    ]
+    for table in FAERS_TABLES:
+        if table not in remaining_tables:
+            logger.info(f"{table} {quarter} already parsed, skipping")
+            results[table.lower()] = \
+                dest_dir / quarter / f"{table.lower()}.parquet"
+
+    if not remaining_tables:
+        logger.info(
+            f"Finished {quarter}: {len(results)}/{len(FAERS_TABLES)} tables"
+        )
+        return results
+
+    if not z.exists():
+        if has_stage(quarter, "downloaded"):
+            raise FileNotFoundError(
+                f"{z} is missing but {quarter} has unparsed tables "
+                f"({', '.join(remaining_tables)}) and no zip to parse them from"
+                ", partial parse with a purged source, needs manual recovery."
+            )
+        raise FileNotFoundError(
+            f"{z} not found and {quarter} isn't marked downloaded -- "
+            "run download_quarter() for this quarter first."
+        )
+
+    with zipfile.ZipFile(z) as zf:
+        for table in remaining_tables:
+            dest_path = dest_dir / quarter / f"{table.lower()}.parquet"
+
+            members = _table_member_name(zf, table, quarter)
+            if not members:
+                logger.error(f"No files found for {table} in {quarter}")
+                raise ValueError(f"No files found for {table} in {quarter}")
+
+            df = pl.concat(
+                [_read_table(zf.read(m), table, quarter, m) for m in members]
+            )
+
+            dest_path.parent.mkdir(parents=True, exist_ok=True)
+            tmp_path = dest_path.with_name(dest_path.name + ".tmp")
+            try:
+                df.write_parquet(tmp_path)
+            except Exception:
+                if tmp_path.exists():
+                    logger.error(
+                        f"Write failed for {table} {quarter}, "
+                        f"removing partial file: {tmp_path}"
+                    )
+                    tmp_path.unlink()
+                raise
+            tmp_path.replace(dest_path)
+            logger.info(f"Wrote {dest_path} ({df.height} rows)")
+            mark_stage(quarter, "parsed", table=table.lower())
+            results[table.lower()] = dest_path
+
+    mark_stage(quarter, "parsed")
+    clear_stage(quarter, "purged")
+    logger.info(
+        f"Finished {quarter}: {len(results)}/{len(FAERS_TABLES)} tables"
+    )
+    return results
 
 
+# ===== Mid-level Helpers =====
+def _table_member_name(
+    z: zipfile.ZipFile, table: str, quarter: str
+) -> list[str]:
+    """Return all zip members for a table, case-insensitive."""
+    results = []
+    quarter = quarter.lower()
+    year_short = quarter[2:4]
+    quarter_code = quarter[4:].upper()
+    for member in z.namelist():
+        pattern = rf".*{table}{year_short}{quarter_code}.*\.TXT"
+        if re.search(pattern, member.upper()):
+            results.append(str(member))
+    return results
+
+def _read_table(
+    raw: bytes, table: str, quarter: str, member: str
+) -> pl.DataFrame:
+    """Parse one FAERS table's $-delimited bytes into a DataFrame."""
+    raw = _check_ragged_lines(raw, table, quarter, member, WARNING_PATH)
+    try:
+        df = pl.read_csv(
+            io.BytesIO(raw),
+            separator="$",
+            infer_schema=False,
+            infer_schema_length=0,
+            truncate_ragged_lines=True,
+            quote_char=None,
+            encoding="utf8-lossy",
+        )
+    except pl.exceptions.ComputeError as e:
+        raise ValueError(f"Failed to parse {table} for {quarter}: {e}") from e
+    return df.rename({c: c.strip() for c in df.columns if c != c.strip()})
+
+
+# ===== Low-level Utilities =====
 def _check_ragged_lines(
-    raw:bytes, table:str, quarter:str, member:str, warning_path: Path
+    raw: bytes, table: str, quarter: str, member: str, warning_path: Path
 ) -> bytes:
-    """Return `raw` with any merged-record lines repaired, logging one summary
-    record to warning_path for rows with MORE fields than the header --
-    that's what `_read_table`'s truncate_ragged_lines would otherwise drop
-    silently. Short rows are ignored: those get null-padded, nothing lost.
-
-    A row with non-empty surplus fields is checked three ways: if it cleanly
-    decomposes into whole records (`_split_merged_records`), it's split and
-    logged as "repaired"; if its case ID has a hand-verified entry in
-    `KNOWN_EMBEDDED_DELIMITER_FIXES` (a literal `$` inside a field, not a
-    merged record), the named fields are rejoined and logged as "repaired";
-    otherwise it's unexplained surplus and raises, since there's no safe way
-    to guess a record boundary. All-empty surplus is FAERS' routine benign
-    trailing-blank-field quirk -- summarized, not raised (see README mess log
-    for all three cases' history).
-
-    Also raises on any bare `\\r` not part of a `\\r\\n` pair -- would mean a
-    free-text field has an embedded newline, which breaks this function's
-    line-based splitting in a way the field counts above can't detect. Files
-    with zero `\\r` bytes at all are treated as a whole-file bare-`\\n`
-    terminator convention (seen starting 2017q4, README mess log) rather than
-    a corruption signal -- every `\\n` there is an unambiguous line
-    terminator, and the split/field-count logic below handles it the same
-    way it handles `\\r\\n`.
-    """
+    """Detect and repair ragged lines (missing/extra line terminators)."""
     if raw.count(b"\r") and (
-        raw.count(b"\r\n") != raw.count(b"\r") or raw.count(b"\r\n") != raw.count(b"\n")
+        raw.count(b"\r\n") != raw.count(b"\r") \
+        or raw.count(b"\r\n") != raw.count(b"\n")
     ):
         raise ValueError(
             f"{table} {quarter} ({member}): found a bare \\r or \\n byte not "
@@ -143,14 +186,19 @@ def _check_ragged_lines(
             if records is not None:
                 warning_path.parent.mkdir(parents=True, exist_ok=True)
                 with open(warning_path, "a") as f:
-                    f.write(json.dumps({
-                        "quarter": quarter,
-                        "table": table,
-                        "member": member,
-                        "level": "repaired",
-                        "line_no": offset + 2,
-                        "records_recovered": len(records),
-                    }) + "\n")
+                    f.write(
+                        json.dumps(
+                            {
+                                "quarter": quarter,
+                                "table": table,
+                                "member": member,
+                                "level": "repaired",
+                                "line_no": offset + 2,
+                                "records_recovered": len(records),
+                            }
+                        )
+                        + "\n"
+                    )
                 for record in records:
                     repaired_lines.append(b"$".join(record) + b"\r")
                 continue
@@ -159,8 +207,9 @@ def _check_ragged_lines(
             fix = KNOWN_EMBEDDED_DELIMITER_FIXES.get((quarter, table, case_id))
             if fix is not None:
                 i, j = fix["merge_fields"]
-                merged_field = fields[i] + _EMBEDDED_DELIMITER_PLACEHOLDER + fields[j]
-                merged = fields[:i] + [merged_field] + fields[j + 1:]
+                merged_field = \
+                    fields[i] + _EMBEDDED_DELIMITER_PLACEHOLDER + fields[j]
+                merged = fields[:i] + [merged_field] + fields[j + 1 :]
                 merged_surplus = merged[expected_fields:]
                 if len(merged) > expected_fields + 1 or any(
                     field.strip() for field in merged_surplus
@@ -175,29 +224,40 @@ def _check_ragged_lines(
                     )
                 warning_path.parent.mkdir(parents=True, exist_ok=True)
                 with open(warning_path, "a") as f:
-                    f.write(json.dumps({
-                        "quarter": quarter,
-                        "table": table,
-                        "member": member,
-                        "level": "repaired",
-                        "line_no": offset + 2,
-                        "reason": "known_embedded_delimiter",
-                        "case_id": case_id,
-                        "merged_fields": list(fix["merge_fields"]),
-                    }) + "\n")
+                    f.write(
+                        json.dumps(
+                            {
+                                "quarter": quarter,
+                                "table": table,
+                                "member": member,
+                                "level": "repaired",
+                                "line_no": offset + 2,
+                                "reason": "known_embedded_delimiter",
+                                "case_id": case_id,
+                                "merged_fields": list(fix["merge_fields"]),
+                            }
+                        )
+                        + "\n"
+                    )
                 repaired_lines.append(b"$".join(merged) + b"\r")
                 continue
 
             warning_path.parent.mkdir(parents=True, exist_ok=True)
             with open(warning_path, "a") as f:
-                f.write(json.dumps({
-                    "quarter": quarter,
-                    "table": table,
-                    "member": member,
-                    "level": "critical",
-                    "line_no": offset + 2,
-                    "surplus": [field.decode(errors="replace") for field in surplus],
-                }) + "\n")
+                f.write(
+                    json.dumps(
+                        {
+                            "quarter": quarter,
+                            "table": table,
+                            "member": member,
+                            "level": "critical",
+                            "line_no": offset + 2,
+                            "surplus": [field.decode(errors="replace")
+                                for field in surplus]
+                        }
+                    )
+                    + "\n"
+                )
             raise ValueError(
                 f"{table} {quarter} line {offset + 2} ({member}): "
                 f"truncate_ragged_lines would silently drop non-empty "
@@ -224,132 +284,22 @@ def _check_ragged_lines(
     return header + b"\n" + b"\n".join(repaired_lines)
 
 
-def _table_member_name(z: zipfile.ZipFile, table: str, quarter: str) -> list[str]:
-    """Return every zip member belonging to `table`, matched case-insensitively.
-
-    A list, not a single name, because a table can be split across multiple
-    files in one quarter (e.g. DRUG24Q4A.TXT and DRUG24Q4B.TXT both belong to
-    DRUG).
-    """
-    results = []
-    quarter = quarter.lower()
-    year_short = quarter[2:4]
-    quarter_code = quarter[4:].upper()
-    for member in z.namelist():
-        pattern = rf".*{table}{year_short}{quarter_code}.*\.TXT"
-        if re.search(pattern, member.upper()):
-            results.append(str(member))
-    return results
-
-
-def _read_table(raw: bytes, table: str, quarter: str, member: str) -> pl.DataFrame:
-    """Parse one FAERS table's raw $-delimited bytes into a DataFrame.
-
-    Every column is read as a string -- FAERS IDs/codes aren't safe to
-    auto-infer (e.g. leading zeros); real typing belongs in load.py.
-
-    `quote_char=None` since FAERS' $-delimited exports aren't
-    quoted/escaped -- a literal `"` in free text is just a character, not a
-    quote (README mess log, faers_ascii_2012q4 DRUG). `encoding="utf8-lossy"`
-    swaps invalid bytes for the replacement character rather than raising,
-    since decades of free text plausibly includes legacy encodings. Column
-    names are stripped of whitespace (README mess log, same quarter's DEMO).
-
-    Ragged lines are checked/repaired against WARNING_PATH before parsing --
-    see `_check_ragged_lines`.
-    """
-    raw = _check_ragged_lines(raw, table, quarter, member, WARNING_PATH)
-    try:
-        df = pl.read_csv(
-            io.BytesIO(raw),
-            separator="$",
-            infer_schema=False,
-            infer_schema_length=0,
-            truncate_ragged_lines=True,
-            quote_char=None,
-            encoding="utf8-lossy",
-        )
-    except pl.exceptions.ComputeError as e:
-        raise ValueError(f"Failed to parse {table} for {quarter}: {e}") from e
-    return df.rename({c: c.strip() for c in df.columns if c != c.strip()})
-
-
-def parse_quarter(z: Path, dest_dir: Path) -> dict[str, Path]:
-    """Parse every FAERS table out of the zip at `z` into Parquet files under
-    dest_dir/<quarter>/<table>.parquet.
-
-    `quarter` is derived from the zip's filename. Skips a table already
-    marked "parsed" in the manifest and not since marked "purged" at the
-    quarter level (see manifest.py -- purge invalidates the manifest's usual
-    completed-means-present assumption), so a re-run after a partial failure
-    doesn't redo tables that already succeeded -- even if the Parquet file
-    has since been uploaded and deleted locally. Each Parquet file is written
-    to a `.tmp` sibling and atomically renamed into place, so a crash
-    mid-write can never leave a corrupt/partial file at `dest_path`.
-
-    Raises ValueError if a table has no matching zip member -- an empty
-    match far more likely means the filename pattern is wrong for this
-    quarter than a genuinely missing table, and should fail loudly rather
-    than silently produce an incomplete dataset.
-    """
-    quarter = z.stem.removeprefix("aers_ascii_").removeprefix("faers_ascii_")
-    logger.info(f"Parsing {quarter} from {z}")
-    results: dict[str, Path] = {}
-
-    purged = has_stage(quarter, "purged")
-    remaining_tables = [
-        table for table in FAERS_TABLES
-        if purged or not has_stage(quarter, "parsed", table=table.lower())
-    ]
-    for table in FAERS_TABLES:
-        if table not in remaining_tables:
-            logger.info(f"{table} {quarter} already parsed, skipping")
-            results[table.lower()] = dest_dir / quarter / f"{table.lower()}.parquet"
-
-    if not remaining_tables:
-        logger.info(f"Finished {quarter}: {len(results)}/{len(FAERS_TABLES)} tables")
-        return results
-
-    if not z.exists():
-        if has_stage(quarter, "downloaded"):
-            raise FileNotFoundError(
-                f"{z} is missing but {quarter} has unparsed tables "
-                f"({', '.join(remaining_tables)}) and no zip to parse them from -- "
-                "partial parse with a purged source zip, needs manual recovery."
-            )
-        raise FileNotFoundError(
-            f"{z} not found and {quarter} isn't marked downloaded -- "
-            "run download_quarter() for this quarter first."
-        )
-
-    with zipfile.ZipFile(z) as zf:
-        for table in remaining_tables:
-            dest_path = dest_dir / quarter / f"{table.lower()}.parquet"
-
-            members = _table_member_name(zf, table, quarter)
-            if not members:
-                logger.error(f"No files found for {table} in {quarter}")
-                raise ValueError(f"No files found for {table} in {quarter}")
-
-            df = pl.concat([_read_table(zf.read(m), table, quarter, m) for m in members])
-
-            dest_path.parent.mkdir(parents=True, exist_ok=True)
-            tmp_path = dest_path.with_name(dest_path.name + ".tmp")
-            try:
-                df.write_parquet(tmp_path)
-            except Exception:
-                if tmp_path.exists():
-                    logger.error(
-                        f"Write failed for {table} {quarter}, removing partial file: {tmp_path}"
-                    )
-                    tmp_path.unlink()
-                raise
-            tmp_path.replace(dest_path)
-            logger.info(f"Wrote {dest_path} ({df.height} rows)")
-            mark_stage(quarter, "parsed", table=table.lower())
-            results[table.lower()] = dest_path
-
-    mark_stage(quarter, "parsed")
-    clear_stage(quarter, "purged")
-    logger.info(f"Finished {quarter}: {len(results)}/{len(FAERS_TABLES)} tables")
-    return results
+def _split_merged_records(
+    fields: list[bytes], expected_fields: int
+) -> list[list[bytes]] | None:
+    """Try to decompose one physical line's fields into 2+ whole records."""
+    records: list[list[bytes]] = []
+    i, n = 0, len(fields)
+    while n - i > expected_fields:
+        remaining = n - i
+        if remaining >= 2 * expected_fields:
+            records.append(fields[i : i + expected_fields])
+            i += expected_fields
+        elif remaining in (expected_fields, expected_fields + 1):
+            records.append(fields[i:n])
+            i = n
+        else:
+            return None
+    if i < n:
+        records.append(fields[i:n])
+    return records if len(records) > 1 else None

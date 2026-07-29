@@ -50,14 +50,23 @@ Goal: FAERS quarters downloaded, parsed to Parquet, deduplicated per FDA's docum
 case-version rules, and queryable via DuckDB with dbt-duckdb marts landing in
 MotherDuck, with passing tests and the data mess documented.
 
-**Superseded (2026-07-22, see `docs/decisions/0005-report-storage-duckdb-motherduck.md`):**
-the paragraph above used to end "...loaded into a clean Postgres staging schema."
-Neon's free tier couldn't hold even a 7-quarter load; report-level data now stays as
-Parquet on R2, queried directly via DuckDB, never bulk-loaded into Postgres.
-`src/faers/load.py`'s current Parquet -> Postgres destination and
-`sql/staging_schema.sql` are both being replaced, not extended — not yet implemented.
-`dedup.py`'s and `schema.py`'s logic (tie-break rules, era crosswalk, typing decisions)
-remain fully valid; only the destination changes.
+Report-level FAERS data lives as Parquet on R2, queried directly via DuckDB — never
+bulk-loaded into Postgres, at any scale. See
+`docs/decisions/0005-report-storage-duckdb-motherduck.md`.
+
+`load.py`'s cross-quarter union has moved from `pl.concat` over per-quarter Polars
+LazyFrames to DuckDB relations (`UNION ALL BY NAME` over per-quarter `read_parquet`
+SELECTs), avoiding a virtual-memory ceiling tied to the *number* of concatenated
+Polars sources rather than to data volume. Polars is now out of `dedup.py`/`load.py`'s
+core logic entirely — both operate on `duckdb.DuckDBPyRelation` end-to-end, staying
+lazy until the same narrow points that used to force a `.collect()`. `schema.py`'s era
+crosswalk (`canonical_rename_map`) is unaffected; `dedup.py`'s tie-break *decisions*
+(`_pick_richest`'s richness comparisons) are unchanged Python, but `keep_primaryids`'
+max-caseversion grouping was reimplemented as SQL. R2 fallback for a missing local
+quarter is wired through DuckDB's `httpfs` extension (`configure_duckdb_r2` in
+`r2.py`) rather than a separate Python download step. See
+`docs/decisions/0006-dedup-union-via-duckdb.md` and the (gitignored)
+`docs/personal/duckdb_integration_plan.md` for the implementation-level detail.
 
 Standing constraints:
 
@@ -79,9 +88,10 @@ For the era-boundary column details, use the `faers-schema-eras` skill.
 - `src/faers/parse.py` — extract files -> Parquet (raw, per-era column names, unmodified)
 - `src/faers/schema.py` — per-era column crosswalk to one canonical schema
 - `src/faers/dedup.py` — case-version deduplication (highest-stakes code; test-first)
-- `src/faers/load.py` — Parquet -> Postgres staging (superseded by decision 0005;
-  destination being replaced with DuckDB-over-R2 + dbt-duckdb -> MotherDuck)
-- `sql/staging_schema.sql` — Postgres staging types (superseded by decision 0005)
+- `src/faers/load.py` — Parquet -> R2 dedup sync; cross-quarter union built on DuckDB
+  relations, not Polars concat (decision 0006, implemented)
+- `sql/staging_schema.sql` — retired; Postgres holds only pgvector embeddings
+  (decision 0005)
 - `notebooks/01_explore_mess.ipynb`
 - `tests/test_dedup.py`
 - `data/raw/`, `data/parquet/` — gitignored, immutable once written

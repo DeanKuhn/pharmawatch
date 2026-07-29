@@ -1,22 +1,30 @@
-import polars as pl # type:ignore
+import duckdb  # type:ignore
+import polars as pl  # type:ignore
 
 from faers.dedup import keep_primaryids, apply_dedup, _pick_richest
 
 
-def _tables_with_empty_children(demo: pl.DataFrame) -> dict[str, pl.LazyFrame]:
+def to_relation(df: pl.DataFrame) -> duckdb.DuckDBPyRelation:
+    """Wrap a Polars DataFrame fixture as the DuckDB relation dedup.py now
+    expects. DuckDB's replacement scan picks up `df` by variable name.
+    """
+    return duckdb.sql("SELECT * FROM df")
+
+
+def _tables_with_empty_children(demo: pl.DataFrame) -> dict[str, duckdb.DuckDBPyRelation]:
     """Wrap a bare DEMO fixture into the full tables dict keep_primaryids now
     expects. Only usable for tests that never produce a tie -- _pick_richest
     is never invoked, so the child tables just need to exist, not have data.
     """
     empty = pl.DataFrame(schema={"primaryid": pl.Utf8})
     return {
-        "demo": demo.lazy(),
-        "drug": empty.lazy(),
-        "reac": empty.lazy(),
-        "indi": empty.lazy(),
-        "outc": empty.lazy(),
-        "rpsr": empty.lazy(),
-        "ther": empty.lazy(),
+        "demo": to_relation(demo),
+        "drug": to_relation(empty),
+        "reac": to_relation(empty),
+        "indi": to_relation(empty),
+        "outc": to_relation(empty),
+        "rpsr": to_relation(empty),
+        "ther": to_relation(empty),
     }
 
 
@@ -31,8 +39,8 @@ class TestPrimaryids:
             "caseversion": ["1", "2"],
         })
 
-        series = keep_primaryids(_tables_with_empty_children(demo))
-        assert series.to_list() == ["101"]
+        winners = keep_primaryids(_tables_with_empty_children(demo))
+        assert winners == ["101"]
 
     def test_keep_primaryids_compares_caseversion_numerically(self):
         """caseversion is read as a string upstream (parse.py infers no types).
@@ -46,14 +54,14 @@ class TestPrimaryids:
             "caseversion": ["9", "10"],
         })
 
-        series = keep_primaryids(_tables_with_empty_children(demo))
-        assert series.to_list() == ["201"]
+        winners = keep_primaryids(_tables_with_empty_children(demo))
+        assert winners == ["201"]
 
     def test_keep_primaryids_spans_quarters_via_concatenated_input(self):
         """keep_primaryids has no notion of "quarter" -- cross-quarter dedup is
         just the caller concatenating DEMO from multiple quarters before calling
         it. This test stands in for that: two rows for the same case, as if
-        pulled from two different quarters' DEMO tables and pl.concat()'d by the
+        pulled from two different quarters' DEMO tables and unioned by the
         caller, with the later quarter's version winning.
         """
         demo = pl.DataFrame({
@@ -62,8 +70,8 @@ class TestPrimaryids:
             "caseversion": ["1", "2"],
         })
 
-        series = keep_primaryids(_tables_with_empty_children(demo))
-        assert series.to_list() == ["301"]
+        winners = keep_primaryids(_tables_with_empty_children(demo))
+        assert winners == ["301"]
 
     def test_keep_primaryids_resolves_tie_deterministically_when_content_identical(self):
         """Same caseid, same caseversion, two different primaryids, and
@@ -79,8 +87,8 @@ class TestPrimaryids:
             "caseversion": ["3", "3"],
         })
 
-        series = keep_primaryids(_tables_with_empty_children(demo))
-        assert series.to_list() == ["400"]
+        winners = keep_primaryids(_tables_with_empty_children(demo))
+        assert winners == ["400"]
 
     def test_keep_primaryids_drops_rows_with_unparseable_caseversion(self):
         """Real pre-2012q4 FAERS noise: a handful of rows have a caseversion
@@ -94,8 +102,8 @@ class TestPrimaryids:
             "caseversion": ["#", "1", "2"],
         })
 
-        series = keep_primaryids(_tables_with_empty_children(demo))
-        assert series.to_list() == ["502"]
+        winners = keep_primaryids(_tables_with_empty_children(demo))
+        assert winners == ["502"]
 
 
 class TestApplyDedup:
@@ -107,10 +115,10 @@ class TestApplyDedup:
             "primaryid": ["100", "101", "102"],
             "drugname": ["ASPIRIN", "IBUPROFEN", "ASPIRIN"],
         })
-        keep = pl.Series(["100", "102"])
+        keep = ["100", "102"]
 
-        result = apply_dedup({"drug": drug.lazy()}, keep)
-        assert result["drug"]["primaryid"].to_list() == ["100", "102"]
+        result = apply_dedup({"drug": to_relation(drug)}, keep)
+        assert result["drug"].pl()["primaryid"].to_list() == ["100", "102"]
 
     def test_drops_exact_duplicate_rows_from_overlapping_quarters(self):
         """Real FAERS data: the same primaryid can show up as a fully
@@ -124,24 +132,25 @@ class TestApplyDedup:
             "primaryid": ["100", "100", "101"],
             "caseid": ["1", "1", "2"],
         })
-        keep = pl.Series(["100", "101"])
+        keep = ["100", "101"]
 
-        result = apply_dedup({"demo": demo.lazy()}, keep)
-        assert result["demo"]["primaryid"].to_list() == ["100", "101"]
+        result = apply_dedup({"demo": to_relation(demo)}, keep)
+        assert result["demo"].pl()["primaryid"].to_list() == ["100", "101"]
 
     def test_duplicate_row_collapse_does_not_merge_distinct_child_rows(self):
         """Two different drugs on the same report share a primaryid but
-        aren't duplicates -- unique() must key on the whole row, not just
-        primaryid, or this would wrongly collapse to one drug.
+        aren't duplicates -- the exact-duplicate collapse must key on the
+        whole row, not just primaryid, or this would wrongly collapse to one
+        drug.
         """
         drug = pl.DataFrame({
             "primaryid": ["100", "100"],
             "drugname": ["ASPIRIN", "IBUPROFEN"],
         })
-        keep = pl.Series(["100"])
+        keep = ["100"]
 
-        result = apply_dedup({"drug": drug.lazy()}, keep)
-        assert result["drug"]["drugname"].to_list() == ["ASPIRIN", "IBUPROFEN"]
+        result = apply_dedup({"drug": to_relation(drug)}, keep)
+        assert result["drug"].pl()["drugname"].to_list() == ["ASPIRIN", "IBUPROFEN"]
 
     def test_resolves_conflicting_demo_rows_for_the_same_primaryid(self):
         """Real FAERS data: primaryid 86164432 has two DEMO rows, identical
@@ -158,11 +167,12 @@ class TestApplyDedup:
             "mfr_sndr": ["AMGEN", "GALDERMA"],
             "wt": ["70", None],
         })
-        keep = pl.Series(["100"])
+        keep = ["100"]
 
-        result = apply_dedup({"demo": demo.lazy()}, keep)
-        assert result["demo"].height == 1
-        assert result["demo"]["mfr_sndr"].to_list() == ["AMGEN"]
+        result = apply_dedup({"demo": to_relation(demo)}, keep)
+        demo_result = result["demo"].pl()
+        assert demo_result.height == 1
+        assert demo_result["mfr_sndr"].to_list() == ["AMGEN"]
 
     def test_conflicting_demo_rows_only_resolved_for_demo_not_child_tables(self):
         """A child table (e.g. drug) legitimately has multiple rows per
@@ -173,10 +183,10 @@ class TestApplyDedup:
             "primaryid": ["100", "100"],
             "drugname": ["ASPIRIN", "IBUPROFEN"],
         })
-        keep = pl.Series(["100"])
+        keep = ["100"]
 
-        result = apply_dedup({"drug": drug.lazy()}, keep)
-        assert result["drug"].height == 2
+        result = apply_dedup({"drug": to_relation(drug)}, keep)
+        assert result["drug"].pl().height == 2
 
     def test_filters_multiple_tables_with_many_rows_per_primaryid(self):
         """DEMO is one row per primaryid; DRUG can be several rows per
@@ -189,11 +199,13 @@ class TestApplyDedup:
             "primaryid": ["100", "100", "101"],
             "drugname": ["ASPIRIN", "IBUPROFEN", "ASPIRIN"],
         })
-        keep = pl.Series(["100"])
+        keep = ["100"]
 
-        result = apply_dedup({"demo": demo.lazy(), "drug": drug.lazy()}, keep)
-        assert result["demo"].height == 1
-        assert result["drug"]["primaryid"].to_list() == ["100", "100"]
+        result = apply_dedup(
+            {"demo": to_relation(demo), "drug": to_relation(drug)}, keep
+        )
+        assert result["demo"].pl().height == 1
+        assert result["drug"].pl()["primaryid"].to_list() == ["100", "100"]
 
 
 class TestPickRichest:
@@ -204,10 +216,10 @@ class TestPickRichest:
 
         demo = pl.DataFrame(schema={"primaryid": pl.Utf8})
         tables = _tables_with_empty_children(demo)
-        tables["drug"] = pl.DataFrame({
+        tables["drug"] = to_relation(pl.DataFrame({
             "primaryid": ["100", "100", "101"],
             "drugname": ["ASPIRIN", "IBUPROFEN", "ASPIRIN"],
-        }).lazy()
+        }))
 
         winner = _pick_richest(["100", "101"], tables)
         assert winner == "100"
@@ -224,10 +236,10 @@ class TestPickRichest:
             "fda_dt": ["20120823", None],
         })
         tables = _tables_with_empty_children(demo)
-        tables["drug"] = pl.DataFrame({
+        tables["drug"] = to_relation(pl.DataFrame({
             "primaryid": ["100", "101"],
             "drugname": ["ASPIRIN", "ASPIRIN"],
-        }).lazy()
+        }))
 
         winner = _pick_richest(["100", "101"], tables)
         assert winner == "100"
@@ -248,15 +260,17 @@ class TestPickRichest:
 
 
 class TestPickRichestNeverMaterializesFullChildTable:
-    def test_collect_only_ever_sees_the_tied_subset(self, monkeypatch):
-        """The whole point of _pick_richest taking LazyFrames: real ties are
-        rare (README mess log: ~94 across the entire 22-year archive), so
-        there's no reason a child table the size of drug (~1GB compressed)
-        should ever be fully materialized just to resolve one. Spies on
-        every pl.LazyFrame.collect() call made anywhere during _pick_richest
-        and asserts none of them ever return more rows than tied_pids could
-        possibly match -- this would fail against a regression back to
-        collect-then-filter.
+    def test_fetchall_only_ever_sees_the_tied_subset(self, monkeypatch):
+        """The whole point of _pick_richest taking DuckDB relations: real
+        ties are rare (README mess log: ~94 across the entire 22-year
+        archive), so there's no reason a child table the size of drug (~1GB
+        compressed) should ever come back to Python in full just to resolve
+        one. Spies on every DuckDBPyRelation.fetchall() call made anywhere
+        during _pick_richest and asserts none of them ever return more rows
+        than tied_pids could possibly match -- _pick_richest's own query
+        shape (filter to tied_pids, then aggregate/select) guarantees this as
+        long as nothing regresses to fetching an unfiltered table client-side
+        first.
         """
         demo = pl.DataFrame(schema={"primaryid": pl.Utf8})
         tables = _tables_with_empty_children(demo)
@@ -268,22 +282,22 @@ class TestPickRichestNeverMaterializesFullChildTable:
             "primaryid": ["100", "100", "101"],
             "drugname": ["ASPIRIN", "IBUPROFEN", "ASPIRIN"],
         })
-        tables["drug"] = pl.concat([noise, tied]).lazy()
+        tables["drug"] = to_relation(pl.concat([noise, tied]))
 
-        collected_heights = []
-        real_collect = pl.LazyFrame.collect
+        fetched_lengths = []
+        real_fetchall = duckdb.DuckDBPyRelation.fetchall
 
-        def spying_collect(self, *args, **kwargs):
-            result = real_collect(self, *args, **kwargs)
-            collected_heights.append(result.height)
+        def spying_fetchall(self, *args, **kwargs):
+            result = real_fetchall(self, *args, **kwargs)
+            fetched_lengths.append(len(result))
             return result
 
-        monkeypatch.setattr(pl.LazyFrame, "collect", spying_collect)
+        monkeypatch.setattr(duckdb.DuckDBPyRelation, "fetchall", spying_fetchall)
 
         winner = _pick_richest(["100", "101"], tables)
 
         assert winner == "100"
-        assert collected_heights, "expected at least one LazyFrame.collect() call"
-        assert all(h <= 3 for h in collected_heights), (
-            f"a collect() materialized more rows than tied_pids could match: {collected_heights}"
+        assert fetched_lengths, "expected at least one fetchall() call"
+        assert all(n <= 2 for n in fetched_lengths), (
+            f"a fetchall() returned more rows than tied_pids could match: {fetched_lengths}"
         )

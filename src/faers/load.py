@@ -3,20 +3,40 @@ Full-archive run, not incremental: dedup needs all quarters in memory at once.
 """
 
 import argparse
+import itertools
 import logging
-import polars as pl # type:ignore
 from pathlib import Path
 
-from faers.schema import apply_schema
-from faers.dedup import keep_primaryids, dedup_table, configure_logging
-from faers.manifest import mark_stage, has_stage
-from faers.r2 import R2Config, load_r2_config, raw_key, canonical_key, upload_parquet, download_parquet
+import duckdb  # type:ignore
+
+from faers.dedup import configure_logging, dedup_table, keep_primaryids
+from faers.manifest import has_stage, mark_stage
+from faers.r2 import (
+    R2Config,
+    canonical_key,
+    configure_duckdb_r2,
+    download_parquet,
+    load_r2_config,
+    raw_key,
+    upload_parquet,
+)
+from faers.schema import canonical_select_sql
 
 logger = logging.getLogger(__name__)
 
+_view_names = (f"__load_view_{i}" for i in itertools.count())
+
+
+def _unique_alias() -> str:
+    return next(_view_names)
+
+
+# ===== Constants =====
 FAERS_TABLES = ["demo", "drug", "indi", "outc", "reac", "rpsr", "ther"]
 
-BIGINT_COLS: dict[str, list[str]] = {t: ["primaryid", "caseid"] for t in FAERS_TABLES}
+BIGINT_COLS: dict[str, list[str]] = {
+    t: ["primaryid", "caseid"] for t in FAERS_TABLES
+}
 INT_COLS: dict[str, list[str]] = {
     "demo": ["caseversion"],
     "drug": ["drug_seq"],
@@ -27,104 +47,15 @@ NUMERIC_COLS: dict[str, list[str]] = {"demo": ["age", "wt"]}
 DATE_COLS: dict[str, list[str]] = {"demo": ["mfr_dt", "init_fda_dt", "fda_dt"]}
 
 
-def cast_canonical_types(df: pl.DataFrame, table: str) -> pl.DataFrame:
-    """Cast df's Utf8 columns to typed columns for the canonical R2 Parquet."""
-    casts = [
-        pl.col(c).cast(pl.Int64, strict=False)
-        for c in BIGINT_COLS.get(table, []) if c in df.columns
-    ] + [
-        pl.col(c).cast(pl.Int32, strict=False)
-        for c in INT_COLS.get(table, []) if c in df.columns
-    ] + [
-        pl.col(c).cast(pl.Float64, strict=False)
-        for c in NUMERIC_COLS.get(table, []) if c in df.columns
-    ] + [
-        pl.col(c).str.strptime(pl.Date, "%Y%m%d", strict=False)
-        for c in DATE_COLS.get(table, []) if c in df.columns
-    ]
-    if not casts:
-        return df
-
-    original = df
-    df = df.with_columns(casts)
-
-    for c in DATE_COLS.get(table, []):
-        if c not in df.columns:
-            continue
-        bad = df.filter(original[c].is_not_null() & df[c].is_null())
-        if bad.height > 0:
-            logger.warning(
-                f"{table}.{c}: {bad.height} row(s) didn't parse as an 8-digit "
-                f"date and were nulled (primaryid(s): {bad['primaryid'].to_list()[:10]})"
-            )
-    return df
-
-
-def load_table_across_quarters(
-    table: str, quarters: list[str], parquet_dir: Path, config: R2Config
-) -> pl.LazyFrame:
-    """Read + apply_schema `table` for every quarter, concat into one LazyFrame.
-    Falls back to R2's raw zone when a local Parquet is missing (deleted
-    after a prior sync), since local disk is scratch space per CLAUDE.md.
-    """
-    df_list = []
-    for q in quarters:
-        path = parquet_dir / q / f"{table}.parquet"
-        if path.exists():
-            df = pl.scan_parquet(path)
-        else:
-            logger.info(f"{q}/{table}.parquet not found locally -- fetching from R2 raw zone.")
-            df = download_parquet(raw_key(table, q), config).lazy()
-        df = apply_schema(df, table, q)
-        df_list.append(df)
-    return pl.concat(df_list, how="diagonal")
-
-
-def sync_quarters_to_r2(
-    quarters: list[str],
-    parquet_dir: Path,
-    config: R2Config,
-) -> None:
-    """Dedup across all quarters, upload the canonical Parquet (overwritten each
-    run, no versioning), then upload each quarter's raw Parquet if not
-    already marked uploaded_raw.
-
-    Dedups, casts, and uploads one table at a time rather than collecting
-    every table into a dict first -- drug/reac decompressed are big enough
-    that holding all seven tables' full DataFrames live simultaneously is
-    what was actually causing the full-archive OOM. Each df goes out of
-    scope (and is eligible for GC) right after its upload_parquet call.
-    """
-    tables = {t: load_table_across_quarters(t, quarters, parquet_dir, config) for t in FAERS_TABLES}
-    keep = keep_primaryids(tables)
-
-    for table, lf in tables.items():
-        df = dedup_table(table, lf, keep)
-        df = cast_canonical_types(df, table)
-        logger.info(f"Uploading canonical {table} ({df.height} rows)...")
-        upload_parquet(df, canonical_key(table), config)
-
-    for q in quarters:
-        for table in FAERS_TABLES:
-            if has_stage(q, "uploaded_raw", table):
-                continue
-            path = parquet_dir / q / f"{table}.parquet"
-            if path.exists():
-                upload_parquet(pl.read_parquet(path), raw_key(table, q), config)
-                logger.info(f"Uploaded raw {q}/{table}")
-            else:
-                download_parquet(raw_key(table, q), config)
-                logger.info(
-                    f"{q}/{table} already on R2 (local file gone) -- marking uploaded_raw without re-upload"
-                )
-            mark_stage(q, "uploaded_raw", table)
-
-
+# ===== Entry Point =====
 def main() -> None:
+    """Dedup all quarters and sync canonical + raw Parquet to R2."""
     configure_logging()
     parser = argparse.ArgumentParser()
     parser.add_argument("quarters", nargs="+", help="e.g. 2019q1 2014q2")
-    parser.add_argument("--parquet-dir", type=Path, default=Path("data/parquet"))
+    parser.add_argument(
+        "--parquet-dir", type=Path, default=Path("data/parquet")
+    )
     args = parser.parse_args()
 
     config = load_r2_config()
@@ -134,6 +65,140 @@ def main() -> None:
     except Exception:
         logger.exception("Sync failed")
         raise
+
+
+# ===== Main Function =====
+def sync_quarters_to_r2(
+    quarters: list[str], parquet_dir: Path, config: R2Config
+) -> None:
+    """Dedup across all quarters, upload canonical + raw Parquet to R2."""
+    con = duckdb.connect()
+    configure_duckdb_r2(con, config)
+
+    tables = {
+        table: load_table_across_quarters(
+            con, table, quarters, parquet_dir, config
+        )
+        for table in FAERS_TABLES
+    }
+    keep = keep_primaryids(tables)
+
+    for name, table in tables.items():
+        rel = dedup_table(name, table, keep)
+        rel = cast_canonical_types(rel, name)
+        row_count = rel.aggregate("count(*) AS cnt").fetchone()[0]
+        logger.info(f"Uploading canonical {name} ({row_count} rows)...")
+        upload_parquet(rel, canonical_key(name), config)
+
+    for q in quarters:
+        for table in FAERS_TABLES:
+            if has_stage(q, "uploaded_raw", table):
+                continue
+            path = parquet_dir / q / f"{table}.parquet"
+            if path.exists():
+                upload_parquet(
+                    con.sql(f"SELECT * FROM read_parquet('{path}')"),
+                    raw_key(table, q),
+                    config,
+                )
+                logger.info(f"Uploaded raw {q}/{table}")
+            else:
+                download_parquet(raw_key(table, q), config)
+                logger.info(
+                    f"{q}/{table} already on R2 (local file gone), "
+                    "marking uploaded_raw without re-upload"
+                )
+            mark_stage(q, "uploaded_raw", table)
+
+
+# ===== Mid-level Helpers =====
+def _resolve_quarter_source(
+    table: str, quarter: str, parquet_dir: Path, config: R2Config
+) -> str:
+    """Local path if present, else the R2 raw-zone s3:// URI as fallback.
+
+    Split out from load_table_across_quarters so tests can check routing
+    (local vs. R2) without DuckDB's httpfs actually resolving the URI over
+    the network -- see docs/personal/duckdb_integration_plan.md.
+    """
+    path = parquet_dir / quarter / f"{table}.parquet"
+    if path.exists():
+        return str(path)
+    logger.info(
+        f"{quarter}/{table}.parquet not found locally, "
+        "reading from R2 raw zone."
+    )
+    return f"s3://{config.bucket}/{raw_key(table, quarter)}"
+
+
+def load_table_across_quarters(
+    con: duckdb.DuckDBPyConnection,
+    table: str,
+    quarters: list[str],
+    parquet_dir: Path,
+    config: R2Config,
+) -> duckdb.DuckDBPyRelation:
+    """Union `table` across all quarters, columns canonicalized."""
+    selects = [
+        canonical_select_sql(
+            con, table, q, _resolve_quarter_source(table, q, parquet_dir, config)
+        )
+        for q in quarters
+    ]
+    return con.sql(" UNION ALL BY NAME ".join(selects))
+
+
+# ===== Low-level Utilities =====
+def cast_canonical_types(
+    rel: duckdb.DuckDBPyRelation, table: str
+) -> duckdb.DuckDBPyRelation:
+    """Cast canonical columns from strings to their proper types."""
+    bigint_cols = set(BIGINT_COLS.get(table, []))
+    int_cols = set(INT_COLS.get(table, []))
+    numeric_cols = set(NUMERIC_COLS.get(table, []))
+    date_cols = [c for c in DATE_COLS.get(table, []) if c in rel.columns]
+
+    select_list = []
+    for c in rel.columns:
+        if c in bigint_cols:
+            select_list.append(f'TRY_CAST("{c}" AS BIGINT) AS "{c}"')
+        elif c in int_cols:
+            select_list.append(f'TRY_CAST("{c}" AS INTEGER) AS "{c}"')
+        elif c in numeric_cols:
+            select_list.append(f'TRY_CAST("{c}" AS DOUBLE) AS "{c}"')
+        elif c in date_cols:
+            select_list.append(
+                f'CAST(TRY_STRPTIME("{c}", \'%Y%m%d\') AS DATE) AS "{c}"'
+            )
+        else:
+            select_list.append(f'"{c}"')
+    flag_list = [
+        f'("{c}" IS NOT NULL AND TRY_STRPTIME("{c}", \'%Y%m%d\') IS NULL) '
+        f'AS "__bad_{c}"'
+        for c in date_cols
+    ]
+
+    tagged_alias = _unique_alias()
+    tagged = rel.query(
+        tagged_alias, f"SELECT {', '.join(select_list + flag_list)} FROM {tagged_alias}"
+    )
+
+    for c in date_cols:
+        check_alias = _unique_alias()
+        bad = tagged.query(
+            check_alias, f'SELECT "primaryid" FROM {check_alias} WHERE "__bad_{c}"'
+        ).fetchall()
+        if bad:
+            logger.warning(
+                f"{table}.{c}: {len(bad)} row(s) didn't parse as 8-digit "
+                f"date, nulled (primaryid(s): {[row[0] for row in bad][:10]})"
+            )
+
+    if not date_cols:
+        return tagged
+    exclude = ", ".join(f'"__bad_{c}"' for c in date_cols)
+    final_alias = _unique_alias()
+    return tagged.query(final_alias, f"SELECT * EXCLUDE ({exclude}) FROM {final_alias}")
 
 
 if __name__ == "__main__":

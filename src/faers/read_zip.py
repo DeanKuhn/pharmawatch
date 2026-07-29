@@ -41,7 +41,9 @@ def show_case(tables: dict[str, list[pl.DataFrame]]) -> None:
 
         combined = pl.concat(dfs)
 
-        table_case_col = next((c for c in combined.columns if c in CASE_ID_COLUMNS), None)
+        table_case_col = next(
+            (c for c in combined.columns if c in CASE_ID_COLUMNS), None
+        )
         if table_case_col is None:
             continue
 
@@ -79,7 +81,9 @@ def read_all_tables(quarter: str) -> dict[str, list[pl.DataFrame]]:
             if re.search(pattern, member.upper()):
                 with z.open(member) as f:
                     df = pl.read_csv(
-                        f, separator="$", infer_schema_length=0, truncate_ragged_lines=True
+                        f, separator="$",
+                        infer_schema_length=0,
+                        truncate_ragged_lines=True
                     )
                 results[table].append(df)
 

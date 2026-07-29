@@ -1,7 +1,8 @@
-"""Track pipeline stage completion (download/parse/upload/...) per quarter and per table.
+"""Track pipeline stage completion (download/parse/upload/...) per quarter
+and per table.
 
 Used across download.py, parse.py, and future upload/purge stages so each can
-check what's already been done -- even after the underlying raw zip or
+check what's already been done, even after the underlying raw zip or
 Parquet file has been deleted.
 """
 
@@ -22,7 +23,10 @@ def _load_manifest(manifest_path: Path) -> dict:
             try:
                 return json.load(f)
             except json.JSONDecodeError:
-                logger.error(f"Manifest at {manifest_path} is corrupted or not valid JSON.")
+                logger.error(
+                    f"Manifest at {manifest_path} is corrupted "
+                    "or not valid JSON."
+                )
                 raise
     return {}
 
@@ -47,7 +51,9 @@ def mark_stage(
     table: str | None = None,
     manifest_path: Path = MANIFEST_PATH,
 ) -> None:
-    """Record that `quarter` (or `table` within it) has completed `stage`, with a UTC timestamp."""
+    """Record that `quarter` (or `table` within it) has completed `stage`,
+    with a UTC timestamp.
+    """
     manifest = _load_manifest(manifest_path)
     entry = manifest.setdefault(quarter, {})
     if table:
@@ -62,7 +68,9 @@ def has_stage(
     table: str | None = None,
     manifest_path: Path = MANIFEST_PATH,
 ) -> bool:
-    """Check the manifest for whether `quarter` (or `table` within it) has completed `stage`."""
+    """Check the manifest for whether `quarter` (or `table` within it) has
+    completed `stage`.
+    """
     manifest = _load_manifest(manifest_path)
     entry = manifest.get(quarter, {})
     if table:
@@ -77,7 +85,7 @@ def clear_stage(
     manifest_path: Path = MANIFEST_PATH,
 ) -> None:
     """Remove `stage` from `quarter` (or `table` within it), if present. No-op
-    if it isn't -- callers don't need to check has_stage first."""
+    if it isn't, callers don't need to check has_stage first."""
     manifest = _load_manifest(manifest_path)
     entry = manifest.get(quarter, {})
     if table:

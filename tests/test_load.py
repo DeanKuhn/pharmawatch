@@ -1,12 +1,28 @@
 import datetime
+from pathlib import Path
 
+import duckdb  # type:ignore
 import polars as pl # type:ignore
 import pytest # type:ignore
 
 from faers.dedup import keep_primaryids, apply_dedup, CHILD_TABLES
-from faers.load import cast_canonical_types, sync_quarters_to_r2, load_table_across_quarters, FAERS_TABLES
+from faers.load import (
+    cast_canonical_types,
+    sync_quarters_to_r2,
+    load_table_across_quarters,
+    _resolve_quarter_source,
+    FAERS_TABLES
+)
 from faers.manifest import has_stage
 from faers.r2 import R2Config
+
+
+def to_relation(df: pl.DataFrame) -> duckdb.DuckDBPyRelation:
+    """Wrap a Polars DataFrame fixture as the DuckDB relation
+    cast_canonical_types now expects. DuckDB's replacement scan picks up
+    `df` by variable name.
+    """
+    return duckdb.sql("SELECT * FROM df")
 
 
 UNUSED_R2_CONFIG = R2Config(
@@ -18,74 +34,82 @@ UNUSED_R2_CONFIG = R2Config(
 class TestLoadTablesAcrossQuarters:
     def test_df_concat_shape_success(self, tmp_path):
         """2010q1's demo has no lit_ref column at all (real 2014q3+ addition,
-        not a missing-value case). pl.concat(how="diagonal") must fill the
-        gap with null rather than erroring on the mismatched schemas.
+        not a missing-value case). UNION ALL BY NAME must fill the gap with
+        null rather than erroring on the mismatched schemas. Both quarters
+        are local here -- no R2/network involved.
         """
         _write_quarter_parquet(tmp_path, "2010q1", "demo",
-            pl.DataFrame({"primaryid": [1], "caseid": [1]}))
+            pl.DataFrame({"primaryid": ["1"], "caseid": ["1"]}))
         _write_quarter_parquet(tmp_path, "2019q1", "demo",
-            pl.DataFrame({"primaryid": [2], "caseid": [2], "lit_ref": ["Smith et al 2015"]}))
+            pl.DataFrame(
+                {"primaryid": ["2"], "caseid": ["2"],
+                 "lit_ref": ["Smith et al 2015"]}
+            ))
 
-        result = load_table_across_quarters("demo", ["2010q1", "2019q1"], tmp_path, UNUSED_R2_CONFIG).collect()
+        con = duckdb.connect()
+        result = load_table_across_quarters(
+            con, "demo", ["2010q1", "2019q1"], tmp_path, UNUSED_R2_CONFIG
+        ).pl()
 
         assert result.height == 2
         assert set(result.columns) == {"primaryid", "caseid", "lit_ref"}
-        assert result.filter(pl.col("primaryid") == 1)["lit_ref"].to_list() == [None]
-        assert result.filter(pl.col("primaryid") == 2)["lit_ref"].to_list() == ["Smith et al 2015"]
+        assert result.filter(pl.col("primaryid") == "1")["lit_ref"].to_list() \
+            == [None]
+        assert result.filter(pl.col("primaryid") == "2")["lit_ref"].to_list() \
+            == ["Smith et al 2015"]
 
-    def test_missing_local_quarter_falls_back_to_r2_raw(self, tmp_path, monkeypatch):
+
+class TestResolveQuarterSource:
+    """load_table_across_quarters delegates the local-vs-R2 routing decision
+    to _resolve_quarter_source. Tested standalone: DuckDB's httpfs actually
+    opening an s3:// URI is real network I/O, not something a unit test
+    should trigger (see docs/personal/duckdb_integration_plan.md's testing
+    discussion) -- only the *decision* of which path string to hand DuckDB
+    is ours to verify here.
+    """
+
+    def test_missing_local_quarter_resolves_to_r2_raw_zone_uri(self):
         """2010q1's local file was deleted after an earlier sync pushed it to
-        R2's raw/ zone. It must still be fetched, not skipped or errored --
-        dedup needs every quarter present on every run.
+        R2's raw/ zone -- resolution must point at that key, not skip or
+        error. (Whether DuckDB's httpfs can actually fetch it is exercised by
+        the real archive sync, not a unit test.)
         """
+        source = _resolve_quarter_source(
+            "demo", "2010q1", Path("/nonexistent"), UNUSED_R2_CONFIG
+        )
+        assert source == "s3://unused/faers/raw/2010q1/demo.parquet"
+
+    def test_present_local_quarter_is_preferred_over_r2(self, tmp_path):
         _write_quarter_parquet(tmp_path, "2019q1", "demo",
-            pl.DataFrame({"primaryid": [2], "caseid": [2]}))
-        # 2010q1 intentionally has no local file written.
+            pl.DataFrame({"primaryid": ["1"], "caseid": ["1"]}))
 
-        fetched_keys = []
-
-        def fake_download_parquet(key, config):
-            fetched_keys.append(key)
-            return pl.DataFrame({"primaryid": [1], "caseid": [1]})
-
-        monkeypatch.setattr("faers.load.download_parquet", fake_download_parquet)
-
-        result = load_table_across_quarters("demo", ["2010q1", "2019q1"], tmp_path, UNUSED_R2_CONFIG).collect()
-
-        assert fetched_keys == ["faers/raw/2010q1/demo.parquet"]
-        assert result.height == 2
-        assert set(result["primaryid"].to_list()) == {1, 2}
-
-    def test_local_file_is_scanned_lazily_not_read_eagerly(self, tmp_path, monkeypatch):
-        """The whole point of this change: reading 89 quarters x 7 tables
-        eagerly at once is what OOM-killed a real sync run. pl.read_parquet
-        must never be called for a quarter whose local file is present --
-        only pl.scan_parquet, so the caller controls when/how much actually
-        gets materialized.
-        """
-        _write_quarter_parquet(tmp_path, "2019q1", "demo",
-            pl.DataFrame({"primaryid": [1], "caseid": [1]}))
-
-        def fail_if_called(*args, **kwargs):
-            raise AssertionError("pl.read_parquet should not be called for a present local file")
-
-        monkeypatch.setattr("faers.load.pl.read_parquet", fail_if_called)
-
-        result = load_table_across_quarters("demo", ["2019q1"], tmp_path, UNUSED_R2_CONFIG).collect()
-        assert result["primaryid"].to_list() == [1]
+        source = _resolve_quarter_source(
+            "demo", "2019q1", tmp_path, UNUSED_R2_CONFIG
+        )
+        assert source == str(tmp_path / "2019q1" / "demo.parquet")
 
 
-def _write_quarter_parquet(parquet_dir, quarter: str, table: str, df: pl.DataFrame) -> None:
+def _write_quarter_parquet(
+    parquet_dir, quarter: str, table: str, df: pl.DataFrame
+) -> None:
     quarter_dir = parquet_dir / quarter
     quarter_dir.mkdir(parents=True, exist_ok=True)
     df.write_parquet(quarter_dir / f"{table}.parquet")
 
 
-def _write_minimal_child_tables(parquet_dir, quarter: str, primaryid: int) -> None:
+def _write_minimal_child_tables(
+    parquet_dir, quarter: str, primaryid: int
+) -> None:
     """Write a throwaway single-row {"primaryid": [primaryid]} file for every
-    table in CHILD_TABLES (drug/reac/indi/outc/rpsr/ther) at this quarter."""
+    table in CHILD_TABLES (drug/reac/indi/outc/rpsr/ther) at this quarter.
+    Written as a string -- real raw Parquet always has primaryid as string
+    (parse.py never infers types), and dedup.py's _sql_in_list assumes that.
+    """
     for table in CHILD_TABLES:
-        _write_quarter_parquet(parquet_dir, quarter, table, pl.DataFrame({"primaryid": [primaryid]}))
+        _write_quarter_parquet(
+            parquet_dir, quarter, table,
+            pl.DataFrame({"primaryid": [str(primaryid)]}
+        ))
 
 
 @pytest.fixture
@@ -121,24 +145,35 @@ def upload_call_counts(monkeypatch, tmp_path):
 
 
 class TestSyncQuartersToR2:
-    def test_canonical_upload_is_deduped_across_quarters(self, tmp_path, uploaded):
+    def test_canonical_upload_is_deduped_across_quarters(
+        self, tmp_path, uploaded
+    ):
         _write_quarter_parquet(tmp_path, "2019q1", "demo",
-            pl.DataFrame({"primaryid": [1], "caseid": [500], "caseversion": [1]}))
+            pl.DataFrame(
+                {"primaryid": ["1"], "caseid": ["500"], "caseversion": ["1"]}
+            ))
         _write_minimal_child_tables(tmp_path, "2019q1", 1)
 
         _write_quarter_parquet(tmp_path, "2019q2", "demo",
-            pl.DataFrame({"primaryid": [2], "caseid": [500], "caseversion": [2]}))
+            pl.DataFrame(
+                {"primaryid": ["2"], "caseid": ["500"], "caseversion": ["2"]}
+            ))
         _write_minimal_child_tables(tmp_path, "2019q2", 2)
 
         sync_quarters_to_r2(["2019q1", "2019q2"], tmp_path, config=R2Config(
             endpoint_url="unused", access_key_id="unused",
             secret_access_key="unused", bucket="unused",
         ))
-        assert uploaded["faers/canonical/demo.parquet"]["primaryid"].to_list() == [2]
+        assert uploaded["faers/canonical/demo.parquet"].pl()["primaryid"].to_list() \
+            == [2]
 
-    def test_uploads_one_canonical_object_per_faers_table(self, tmp_path, uploaded):
+    def test_uploads_one_canonical_object_per_faers_table(
+        self, tmp_path, uploaded
+    ):
         _write_quarter_parquet(tmp_path, "2019q1", "demo",
-            pl.DataFrame({"primaryid": [1], "caseid": [1], "caseversion": [1]}))
+            pl.DataFrame(
+                {"primaryid": ["1"], "caseid": ["1"], "caseversion": ["1"]}
+            ))
         _write_minimal_child_tables(tmp_path, "2019q1", 1)
 
         sync_quarters_to_r2(["2019q1"], tmp_path, config=R2Config(
@@ -149,9 +184,13 @@ class TestSyncQuartersToR2:
         for table in FAERS_TABLES:
             assert f"faers/canonical/{table}.parquet" in uploaded
 
-    def test_second_run_does_not_reupload_raw_but_reuploads_canonical(self, tmp_path, upload_call_counts):
+    def test_second_run_does_not_reupload_raw_but_reuploads_canonical(
+        self, tmp_path, upload_call_counts
+    ):
         _write_quarter_parquet(tmp_path, "2019q1", "demo",
-            pl.DataFrame({"primaryid": [1], "caseid": [1], "caseversion": [1]}))
+            pl.DataFrame(
+                {"primaryid": ["1"], "caseid": ["1"], "caseversion": ["1"]}
+            ))
         _write_minimal_child_tables(tmp_path, "2019q1", 1)
 
         config = R2Config(endpoint_url="unused", access_key_id="unused",
@@ -169,17 +208,40 @@ class TestSyncQuartersToR2:
         died before mark_stage recorded "uploaded_raw", and the local file is
         (correctly) already gone. The raw-upload loop must confirm the object
         exists via download_parquet rather than crash or blindly re-upload.
+
+        This is a test of the raw-upload loop specifically (lines in
+        sync_quarters_to_r2 after the canonical dedup/upload step), which
+        still calls download_parquet directly -- unaffected by the DuckDB/
+        httpfs union work. But sync_quarters_to_r2 also runs the *canonical*
+        union first, which for a genuinely-missing local file would ask
+        DuckDB's httpfs to fetch demo/2019q1 from R2 for real. Rather than
+        hit real network, _resolve_quarter_source is patched to point the
+        canonical union at a same-shape stand-in file instead of an s3://
+        URI -- this test's concern is the raw-upload loop's re-upload logic,
+        not R2 fetch itself (see TestResolveQuarterSource for that).
         """
         _write_quarter_parquet(tmp_path, "2019q1", "demo",
-            pl.DataFrame({"primaryid": [1], "caseid": [1], "caseversion": [1]}))
+            pl.DataFrame(
+                {"primaryid": ["1"], "caseid": ["1"], "caseversion": ["1"]}
+            ))
         _write_minimal_child_tables(tmp_path, "2019q1", 1)
-        (tmp_path / "2019q1" / "demo.parquet").unlink()
+        r2_mirror = tmp_path / "_r2_mirror_demo.parquet"
+        (tmp_path / "2019q1" / "demo.parquet").rename(r2_mirror)
+
+        from faers.load import _resolve_quarter_source as real_resolve
+
+        def fake_resolve(table, quarter, parquet_dir, config):
+            if (table, quarter) == ("demo", "2019q1"):
+                return str(r2_mirror)
+            return real_resolve(table, quarter, parquet_dir, config)
+
+        monkeypatch.setattr("faers.load._resolve_quarter_source", fake_resolve)
 
         download_calls = []
         monkeypatch.setattr(
             "faers.load.download_parquet",
             lambda key, config: download_calls.append(key) or pl.DataFrame(
-                {"primaryid": [1], "caseid": [1], "caseversion": [1]}
+                {"primaryid": ["1"], "caseid": ["1"], "caseversion": ["1"]}
             ),
         )
 
@@ -194,30 +256,40 @@ class TestSyncQuartersToR2:
 
 class TestCastForStaging:
     def test_bigint_columns_cast_to_int64(self):
-        df = pl.DataFrame({"primaryid": ["1"], "caseid": ["2"], "drugname": ["ASPIRIN"]})
-        result = cast_canonical_types(df, "drug")
+        df = pl.DataFrame(
+            {"primaryid": ["1"], "caseid": ["2"], "drugname": ["ASPIRIN"]}
+        )
+        result = cast_canonical_types(to_relation(df), "drug").pl()
         assert result.schema["primaryid"] == pl.Int64
         assert result.schema["caseid"] == pl.Int64
         assert result["primaryid"].to_list() == [1]
         assert result["caseid"].to_list() == [2]
 
     def test_caseversion_cast_to_int32(self):
-        df = pl.DataFrame({"primaryid": ["1"], "caseid": ["2"], "caseversion": ["3"]})
-        result = cast_canonical_types(df, "demo")
+        df = pl.DataFrame(
+            {"primaryid": ["1"], "caseid": ["2"], "caseversion": ["3"]}
+        )
+        result = cast_canonical_types(to_relation(df), "demo").pl()
         assert result.schema["caseversion"] == pl.Int32
         assert result["caseversion"].to_list() == [3]
 
     def test_drug_seq_variants_cast_to_int32_per_table(self):
-        drug = cast_canonical_types(pl.DataFrame({"primaryid": ["1"], "drug_seq": ["1"]}), "drug")
-        indi = cast_canonical_types(pl.DataFrame({"primaryid": ["1"], "indi_drug_seq": ["1"]}), "indi")
-        ther = cast_canonical_types(pl.DataFrame({"primaryid": ["1"], "dsg_drug_seq": ["1"]}), "ther")
+        drug = cast_canonical_types(
+            to_relation(pl.DataFrame({"primaryid": ["1"], "drug_seq": ["1"]})), "drug"
+        ).pl()
+        indi = cast_canonical_types(
+            to_relation(pl.DataFrame({"primaryid": ["1"], "indi_drug_seq": ["1"]})), "indi"
+        ).pl()
+        ther = cast_canonical_types(
+            to_relation(pl.DataFrame({"primaryid": ["1"], "dsg_drug_seq": ["1"]})), "ther"
+        ).pl()
         assert drug.schema["drug_seq"] == pl.Int32
         assert indi.schema["indi_drug_seq"] == pl.Int32
         assert ther.schema["dsg_drug_seq"] == pl.Int32
 
     def test_numeric_columns_cast_to_float64(self):
         df = pl.DataFrame({"primaryid": ["1"], "age": ["45.5"], "wt": ["70"]})
-        result = cast_canonical_types(df, "demo")
+        result = cast_canonical_types(to_relation(df), "demo").pl()
         assert result.schema["age"] == pl.Float64
         assert result.schema["wt"] == pl.Float64
         assert result["age"].to_list() == [45.5]
@@ -230,52 +302,60 @@ class TestCastForStaging:
             "init_fda_dt": ["20190116"],
             "fda_dt": ["20190117"],
         })
-        result = cast_canonical_types(df, "demo")
+        result = cast_canonical_types(to_relation(df), "demo").pl()
         assert result.schema["mfr_dt"] == pl.Date
         assert result["mfr_dt"].to_list() == [datetime.date(2019, 1, 15)]
         assert result["init_fda_dt"].to_list() == [datetime.date(2019, 1, 16)]
         assert result["fda_dt"].to_list() == [datetime.date(2019, 1, 17)]
 
     def test_text_columns_are_untouched(self):
-        df = pl.DataFrame({"primaryid": ["1"], "drugname": ["ASPIRIN"], "route": ["ORAL"]})
-        result = cast_canonical_types(df, "drug")
+        df = pl.DataFrame(
+            {"primaryid": ["1"], "drugname": ["ASPIRIN"], "route": ["ORAL"]}
+        )
+        result = cast_canonical_types(to_relation(df), "drug").pl()
         assert result.schema["drugname"] == pl.Utf8
         assert result.schema["route"] == pl.Utf8
         assert result["drugname"].to_list() == ["ASPIRIN"]
 
     def test_empty_string_becomes_null_instead_of_erroring(self):
-        df = pl.DataFrame({"primaryid": ["1"], "caseid": ["2"], "caseversion": [""], "age": [""]})
-        result = cast_canonical_types(df, "demo")
+        df = pl.DataFrame(
+            {"primaryid": ["1"], "caseid": ["2"],
+             "caseversion": [""], "age": [""]}
+        )
+        result = cast_canonical_types(to_relation(df), "demo").pl()
         assert result["caseversion"].to_list() == [None]
         assert result["age"].to_list() == [None]
 
     def test_partial_precision_date_becomes_null_and_is_not_fabricated(self):
         df = pl.DataFrame({"primaryid": ["1"], "mfr_dt": ["2019"]})
-        result = cast_canonical_types(df, "demo")
+        result = cast_canonical_types(to_relation(df), "demo").pl()
         assert result["mfr_dt"].to_list() == [None]
 
     def test_unparseable_date_logs_a_warning_naming_the_primaryid(self, caplog):
         df = pl.DataFrame({"primaryid": ["999"], "mfr_dt": ["bad"]})
         with caplog.at_level("WARNING"):
-            cast_canonical_types(df, "demo")
-        assert any("demo.mfr_dt" in r.message and "999" in r.message for r in caplog.records)
+            cast_canonical_types(to_relation(df), "demo")
+        assert any(
+            "demo.mfr_dt" in r.message and "999"
+            in r.message for r in caplog.records
+        )
 
     def test_valid_dates_do_not_log_a_warning(self, caplog):
         df = pl.DataFrame({"primaryid": ["1"], "mfr_dt": ["20190115"]})
         with caplog.at_level("WARNING"):
-            cast_canonical_types(df, "demo")
+            cast_canonical_types(to_relation(df), "demo")
         assert caplog.records == []
 
     def test_table_with_no_matching_cast_columns_is_unchanged(self):
         df = pl.DataFrame({"foo": ["bar"]})
-        result = cast_canonical_types(df, "not_a_real_table")
+        result = cast_canonical_types(to_relation(df), "not_a_real_table").pl()
         assert result.columns == ["foo"]
         assert result.schema["foo"] == pl.Utf8
         assert result["foo"].to_list() == ["bar"]
 
     def test_missing_mapped_column_does_not_error(self):
         df = pl.DataFrame({"primaryid": ["1"], "drugname": ["ASPIRIN"]})
-        result = cast_canonical_types(df, "drug")
+        result = cast_canonical_types(to_relation(df), "drug").pl()
         assert "caseid" not in result.columns
         assert result.schema["primaryid"] == pl.Int64
 
@@ -284,6 +364,6 @@ class TestCastForStaging:
 
         for table in FAERS_TABLES:
             df = pl.DataFrame({"primaryid": ["1"], "caseid": ["2"]})
-            result = cast_canonical_types(df, table)
+            result = cast_canonical_types(to_relation(df), table).pl()
             assert result.schema["primaryid"] == pl.Int64
             assert result.schema["caseid"] == pl.Int64
