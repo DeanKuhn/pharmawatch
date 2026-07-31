@@ -5,6 +5,7 @@ import logging
 from pathlib import Path
 
 import duckdb  # type:ignore
+import polars as pl  # type:ignore
 
 logger = logging.getLogger(__name__)
 
@@ -85,19 +86,16 @@ def keep_primaryids(tables: dict[str, duckdb.DuckDBPyRelation]) -> list[str]:
         "demo",
         grouped_cte + "SELECT caseid, tied_pids FROM grouped WHERE n > 1",
     ).fetchall()
-    total_ties = len(tied)
-    logger.info(f"Total ties remaining: {total_ties}")
+    logger.info(f"Total ties remaining: {len(tied)}")
 
-    resolved = []
-    for i, (caseid, tied_pids) in enumerate(tied, start=1):
-        winner = _pick_richest(tied_pids, tables)
-        print(f"Fixing tie {i} of {total_ties}")
+    winner_by_caseid = _resolve_ties(tied, tables)
+    for caseid, tied_pids in tied:
+        winner = winner_by_caseid[caseid]
         logger.info(
             f"caseid {caseid}: resolved tie among {tied_pids} -> kept {winner}"
         )
-        resolved.append(winner)
 
-    return winners + resolved
+    return winners + list(winner_by_caseid.values())
 
 
 def dedup_table(
@@ -106,7 +104,13 @@ def dedup_table(
     """Filter table to primaryids in keep, drop exact duplicates."""
     original_height = table.aggregate("count(*) AS count").fetchone()[0]
 
-    keep_list = _sql_in_list(keep)
+    # `keep` runs to tens of millions of primaryids for a full-archive run --
+    # inlining it as SQL literals (`_sql_in_list`) forces DuckDB's parser to
+    # build an AST node per literal, which is what crashed the 89-quarter
+    # run. Wrapping it as a Polars DataFrame and semi-joining against it
+    # instead moves the data across as Arrow, not SQL text, and DuckDB hash-
+    # joins it like any other relation.
+    keep_df = pl.DataFrame({"primaryid": keep})  # noqa: F841 -- read via replacement scan below
     numbered_alias = _unique_alias()
     deduped = table.query(
         numbered_alias,
@@ -114,7 +118,7 @@ def dedup_table(
         WITH numbered AS (
             SELECT *, ROW_NUMBER() OVER () AS __rownum
             FROM {numbered_alias}
-            WHERE primaryid IN ({keep_list})
+            WHERE primaryid IN (SELECT primaryid FROM keep_df)
         )
         SELECT * EXCLUDE (__rownum), MIN(__rownum) AS __rownum
         FROM numbered
@@ -146,39 +150,60 @@ def apply_dedup(
 
 
 # ===== Low-level Helpers =====
-def _pick_richest(
-    tied_pids: list[str], tables: dict[str, duckdb.DuckDBPyRelation]
-) -> str:
-    """Break tie by most child-table rows, then most non-null demo fields."""
-    counts = {pid: 0 for pid in tied_pids}
-    tied_list = _sql_in_list(tied_pids)
+def _resolve_ties(
+    tied_groups: list[tuple[str, list[str]]],
+    tables: dict[str, duckdb.DuckDBPyRelation],
+) -> dict[str, str]:
+    """Break every tie in `tied_groups` at once: same rule as before (most
+    child-table rows, then most non-null demo fields, then lowest
+    primaryid), but child/demo counts are queried once over the union of
+    every tied primaryid in the whole run, instead of once per tie. A run
+    with thousands of ties previously issued 6 (child tables) x N (ties)
+    filtered queries against the full cross-quarter union; this issues 6 +
+    1 total, then does the actual ranking in Python over the (small) tied
+    sets.
+    """
+    if not tied_groups:
+        return {}
 
+    all_pids = sorted({pid for _, pids in tied_groups for pid in pids})
+    pid_list = _sql_in_list(all_pids)
+
+    child_counts = {pid: 0 for pid in all_pids}
     for name in CHILD_TABLES:
-        rows = tables[name].filter(f"primaryid IN ({tied_list})").aggregate(
+        rows = tables[name].filter(f"primaryid IN ({pid_list})").aggregate(
             "primaryid, count(*) AS cnt", "primaryid"
         ).fetchall()
         for pid, cnt in rows:
-            counts[pid] += cnt
+            child_counts[pid] += cnt
 
-    max_count = max(counts.values())
-    richest = [pid for pid, c in counts.items() if c == max_count]
-    if len(richest) == 1:
-        return richest[0]
-
-    richest_list = _sql_in_list(richest)
-    demo_sub = tables["demo"].filter(f"primaryid IN ({richest_list})")
+    demo_sub = tables["demo"].filter(f"primaryid IN ({pid_list})")
     pid_idx = demo_sub.columns.index("primaryid")
     non_null_counts = {
         row[pid_idx]: sum(1 for v in row if v is not None)
         for row in demo_sub.fetchall()
     }
 
-    max_nn = max(non_null_counts.values())
-    richest2 = [pid for pid, c in non_null_counts.items() if c == max_nn]
-    if len(richest2) == 1:
-        return richest2[0]
+    return {
+        caseid: max(
+            tied_pids,
+            key=lambda pid: (
+                child_counts[pid],
+                non_null_counts.get(pid, 0),
+                -int(pid),
+            ),
+        )
+        for caseid, tied_pids in tied_groups
+    }
 
-    return min(richest2, key=int)
+
+def _pick_richest(
+    tied_pids: list[str], tables: dict[str, duckdb.DuckDBPyRelation]
+) -> str:
+    """Break tie by most child-table rows, then most non-null demo fields,
+    then lowest primaryid. Single-group entry point into _resolve_ties.
+    """
+    return _resolve_ties([("_single", tied_pids)], tables)["_single"]
 
 
 def _resolve_conflicting_primaryid_rows(

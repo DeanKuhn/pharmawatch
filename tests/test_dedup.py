@@ -1,7 +1,7 @@
 import duckdb  # type:ignore
 import polars as pl  # type:ignore
 
-from faers.dedup import keep_primaryids, apply_dedup, _pick_richest
+from faers.dedup import keep_primaryids, apply_dedup, _pick_richest, _resolve_ties
 
 
 def to_relation(df: pl.DataFrame) -> duckdb.DuckDBPyRelation:
@@ -300,4 +300,87 @@ class TestPickRichestNeverMaterializesFullChildTable:
         assert fetched_lengths, "expected at least one fetchall() call"
         assert all(n <= 2 for n in fetched_lengths), (
             f"a fetchall() returned more rows than tied_pids could match: {fetched_lengths}"
+        )
+
+
+class TestResolveTiesBatch:
+    """keep_primaryids used to call _pick_richest once per tie in a Python
+    loop -- one full round trip per tie, per child table. A run against all
+    89 quarters hit thousands of ties this way and crashed (see the load.py
+    run that motivated this). _resolve_ties replaces that loop with a fixed
+    number of queries covering every tie in the run at once; these tests
+    guard the two ways batching could go wrong: groups bleeding into each
+    other, and the query count creeping back up with tie count.
+    """
+
+    def test_resolves_independent_ties_without_cross_contamination(self):
+        """Two unrelated tie groups in one call. Group A's winner (100) is
+        decided by child-row count; group B's winner (200) is decided by
+        the demo non-null tiebreak, and neither of its candidates comes
+        close to group A's child-row count. A batching bug that scored
+        candidates against the wrong group's counts, or picked a global max
+        across all tied primaryids instead of ranking within each caseid,
+        would return the wrong winner for B (or a primaryid -- 100/101 --
+        that isn't even one of B's candidates).
+        """
+        demo = pl.DataFrame({
+            "primaryid": ["100", "101", "200", "201"],
+            "caseid": ["A", "A", "B", "B"],
+            "caseversion": ["2", "2", "2", "2"],
+            "fda_dt": [None, None, "20120823", None],
+        })
+        tables = _tables_with_empty_children(demo)
+        tables["drug"] = to_relation(pl.DataFrame({
+            "primaryid": ["100", "100", "100", "101", "200", "201"],
+            "drugname": ["ASPIRIN", "IBUPROFEN", "TYLENOL", "ASPIRIN", "ASPIRIN", "ASPIRIN"],
+        }))
+
+        winners = _resolve_ties(
+            [("A", ["100", "101"]), ("B", ["200", "201"])], tables
+        )
+
+        assert winners == {"A": "100", "B": "200"}
+
+    def test_query_count_stays_constant_as_tie_count_grows(self, monkeypatch):
+        """The whole point of batching: query count should depend on the
+        number of child tables, not the number of ties. Compares the
+        fetchall() call count for one tie against fifty independent ties --
+        a regression back to one-query-per-tie would make the second count
+        balloon.
+        """
+        demo_rows = {"primaryid": [], "caseid": [], "caseversion": []}
+        drug_rows = {"primaryid": [], "drugname": []}
+        groups = []
+        for i in range(50):
+            a, b = f"{i}00", f"{i}01"
+            demo_rows["primaryid"] += [a, b]
+            demo_rows["caseid"] += [str(i), str(i)]
+            demo_rows["caseversion"] += ["1", "1"]
+            drug_rows["primaryid"] += [a]
+            drug_rows["drugname"] += ["ASPIRIN"]
+            groups.append((str(i), [a, b]))
+
+        tables = _tables_with_empty_children(pl.DataFrame(demo_rows))
+        tables["drug"] = to_relation(pl.DataFrame(drug_rows))
+
+        call_counts = []
+        real_fetchall = duckdb.DuckDBPyRelation.fetchall
+
+        def counting_fetchall(self, *args, **kwargs):
+            call_counts.append(1)
+            return real_fetchall(self, *args, **kwargs)
+
+        monkeypatch.setattr(duckdb.DuckDBPyRelation, "fetchall", counting_fetchall)
+
+        call_counts.clear()
+        _resolve_ties(groups[:1], tables)
+        one_tie_calls = len(call_counts)
+
+        call_counts.clear()
+        _resolve_ties(groups, tables)
+        fifty_tie_calls = len(call_counts)
+
+        assert fifty_tie_calls == one_tie_calls, (
+            f"query count grew with tie count: {one_tie_calls} calls for 1 tie "
+            f"vs {fifty_tie_calls} calls for 50 ties"
         )
