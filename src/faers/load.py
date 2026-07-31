@@ -75,6 +75,14 @@ def sync_quarters_to_r2(
     con = duckdb.connect()
     configure_duckdb_r2(con, config)
 
+    # Cap DuckDB well under total RAM (7.7GB boxes have crashed at this run's
+    # scale) and give it disk to spill to instead of failing outright -- see
+    # docs/personal/full_archive_load_crash_debugging.md.
+    spill_dir = Path("data/duckdb_spill")
+    spill_dir.mkdir(parents=True, exist_ok=True)
+    con.execute("PRAGMA memory_limit='4GB'")
+    con.execute(f"PRAGMA temp_directory='{spill_dir}'")
+
     tables = {
         table: load_table_across_quarters(
             con, table, quarters, parquet_dir, config
