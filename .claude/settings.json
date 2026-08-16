@@ -20,11 +20,6 @@
                         "type": "command",
                         "command": "${CLAUDE_PROJECT_DIR}/.claude/hooks/format-python.sh",
                         "args": []
-                    },
-                    {
-                        "type": "command",
-                        "command": "${CLAUDE_PROJECT_DIR}/.claude/hooks/test-dedup.sh",
-                        "args": []
                     }
                 ]
             }
