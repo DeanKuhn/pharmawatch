@@ -48,19 +48,18 @@ def main() -> None:
 def download_quarter(
     quarter: str, dest_dir: Path, client: httpx.Client | None = None,
 ) -> Path:
-    """Download a single FAERS zip for quarter into dest_dir. Skips if already
-    marked "downloaded" in the manifest and not since marked "purged."
-    """
+    """Download a single FAERS zip for quarter into dest_dir."""
     dest_dir.mkdir(parents=True, exist_ok=True)
 
     prefix, filename = _filename_for_quarter(quarter)
     final_path = dest_dir / filename
     tmp_path = dest_dir / f"{filename}.tmp"
 
-    if has_stage(quarter, "downloaded") and not has_stage(quarter, "purged"):
-        logger.info(f"Quarter already downloaded per manifest: {quarter}")
+    if has_stage(quarter, "local"):
+        logger.info(f"Quarter already exists locally: {quarter}")
         return final_path
 
+    owns_client = client is None
     client = client or httpx.Client()
     url = FAERS_URL_TEMPLATE.format(prefix=prefix, quarter=quarter)
     logger.info(f"Downloading {quarter} from {url}")
@@ -73,10 +72,13 @@ def download_quarter(
             )
             tmp_path.unlink()
         raise
+    finally:
+        if owns_client:
+            client.close()
 
     tmp_path.replace(final_path)
     logger.info(f"Saved to {final_path}")
-    mark_stage(quarter, "downloaded")
+    mark_stage(quarter, "local")
     return final_path
 
 

@@ -6,10 +6,19 @@
 # this guards against.
 #
 # MemoryMax is a hard cap (OOM-killed if exceeded); MemoryHigh throttles
-# before that point. Both sit above DuckDB's own memory_limit pragma (4GB in
-# load.py) to leave headroom for Python/Polars overhead within the job, while
-# staying under total box RAM (7.7GB) so the rest of the session is never
-# starved.
+# before that point. Both are derived from the VM's actual MemTotal rather
+# than hardcoded, because a cap above total RAM cannot ever fire: on
+# 2026-07-31 a 10500M cap on a 7.67GB VM let the kernel's global OOM killer
+# take the job first, with the scope's own limit never reached. The same
+# reasoning governs DuckDB's memory_limit in load.py::duckdb_memory_limit_mb.
 set -euo pipefail
-exec systemd-run --user --scope -p MemoryHigh=4500M -p MemoryMax=5500M -- \
-    python -m faers.load "$@"
+
+total_kb=$(awk '/^MemTotal:/ {print $2}' /proc/meminfo)
+high_mb=$((total_kb * 70 / 100 / 1024))
+max_mb=$((total_kb * 80 / 100 / 1024))
+
+echo "scope caps: MemoryHigh=${high_mb}M MemoryMax=${max_mb}M (MemTotal=$((total_kb / 1024))M)" >&2
+
+exec systemd-run --user --scope \
+    -p "MemoryHigh=${high_mb}M" -p "MemoryMax=${max_mb}M" -- \
+    uv run python -m faers.load "$@"

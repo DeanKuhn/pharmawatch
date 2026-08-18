@@ -264,17 +264,17 @@ class TestReadTable:
 class TestClearStage:
     def test_removes_a_set_stage(self, tmp_path):
         manifest_path = tmp_path / "manifest.json"
-        mark_stage("2004q1", "purged", manifest_path=manifest_path)
-        assert has_stage("2004q1", "purged", manifest_path=manifest_path)
+        mark_stage("2004q1", "local", manifest_path=manifest_path)
+        assert has_stage("2004q1", "local", manifest_path=manifest_path)
 
-        clear_stage("2004q1", "purged", manifest_path=manifest_path)
+        clear_stage("2004q1", "local", manifest_path=manifest_path)
 
-        assert not has_stage("2004q1", "purged", manifest_path=manifest_path)
+        assert not has_stage("2004q1", "local", manifest_path=manifest_path)
 
     def test_noop_when_stage_was_never_set(self, tmp_path):
         manifest_path = tmp_path / "manifest.json"
-        clear_stage("2004q1", "purged", manifest_path=manifest_path)
-        assert not has_stage("2004q1", "purged", manifest_path=manifest_path)
+        clear_stage("2004q1", "local", manifest_path=manifest_path)
+        assert not has_stage("2004q1", "local", manifest_path=manifest_path)
 
     def test_clears_only_the_given_table(self, tmp_path):
         manifest_path = tmp_path / "manifest.json"
@@ -318,15 +318,9 @@ class TestParseQuarter:
         for table in ["demo", "drug", "outc", "rpsr", "ther", "indi"]:
             assert results[table].exists()
 
-    def test_reparses_purged_quarter_despite_parsed_flag(self, tmp_path, monkeypatch):
+    def test_reparses_when_table_flags_cleared(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
-        # Simulates the post-purge state: manifest says every table already
-        # parsed, but the local Parquet is gone (and the quarter is marked
-        # "purged" to say so) -- parse_quarter must not trust "parsed" alone.
-        for table in ["demo", "drug", "reac", "outc", "rpsr", "ther", "indi"]:
-            mark_stage("2004q1", "parsed", table=table)
         mark_stage("2004q1", "parsed")
-        mark_stage("2004q1", "purged")
 
         z = _make_tables_zip(tmp_path / "aers_ascii_2004q1.zip", "2004q1")
         dest_dir = tmp_path / "parquet"
@@ -334,16 +328,6 @@ class TestParseQuarter:
 
         for table, path in results.items():
             assert path.exists()
-
-    def test_clears_purged_flag_once_fully_reparsed(self, tmp_path, monkeypatch):
-        monkeypatch.chdir(tmp_path)
-        mark_stage("2004q1", "purged")
-
-        z = _make_tables_zip(tmp_path / "aers_ascii_2004q1.zip", "2004q1")
-        dest_dir = tmp_path / "parquet"
-        parse_quarter(z, dest_dir)
-
-        assert not has_stage("2004q1", "purged")
 
     def test_raises_when_table_member_missing(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
@@ -365,3 +349,86 @@ class TestParseQuarter:
 
         with pytest.raises(FileNotFoundError):
             parse_quarter(missing_zip, tmp_path / "parquet")
+
+class TestDeletedListDuringParse:
+    def test_writes_deleted_parquet_alongside_the_tables(self, tmp_path, monkeypatch):
+        """A quarter parsed from scratch should land its retraction list in
+        the same directory as the seven tables, so load.py's glob finds it
+        without a separate backfill step.
+        """
+        import polars as pl  # type:ignore
+        monkeypatch.chdir(tmp_path)
+        zip_path = _make_tables_zip(tmp_path / "faers_ascii_2024q4.zip", "2024q4")
+        with zipfile.ZipFile(zip_path, "a") as zf:
+            zf.writestr("Deleted/DELETE24Q4.txt", b" \n10538413\n12456911\n")
+
+        parse_quarter(zip_path, tmp_path / "parquet")
+
+        written = tmp_path / "parquet" / "2024q4" / "deleted.parquet"
+        assert written.exists()
+        assert pl.read_parquet(written)["caseid"].to_list() == [
+            10538413, 12456911
+        ]
+
+    def test_pre_2019_quarter_writes_nothing_and_stays_quiet(
+        self, tmp_path, monkeypatch, caplog
+    ):
+        """No retraction list existed before 2019q1, so its absence is not an
+        anomaly and must not be logged as one.
+        """
+        monkeypatch.chdir(tmp_path)
+        zip_path = _make_tables_zip(tmp_path / "aers_ascii_2004q1.zip", "2004q1")
+
+        parse_quarter(zip_path, tmp_path / "parquet")
+
+        assert not (tmp_path / "parquet" / "2004q1" / "deleted.parquet").exists()
+        assert "no deleted-case member" not in caplog.text
+
+    def test_missing_list_after_2019_is_logged_as_an_error(
+        self, tmp_path, monkeypatch, caplog
+    ):
+        """The original bug: an unrecognized or absent deleted-case file
+        produced no signal at all. A post-2019q1 quarter without one now
+        raises an error in the log rather than passing silently.
+        """
+        monkeypatch.chdir(tmp_path)
+        zip_path = _make_tables_zip(tmp_path / "faers_ascii_2025q1.zip", "2025q1")
+
+        parse_quarter(zip_path, tmp_path / "parquet")
+
+        assert "no deleted-case member in the zip" in caplog.text
+
+
+class TestUnmatchedMemberLogging:
+    def test_an_unrecognized_data_file_is_surfaced(
+        self, tmp_path, monkeypatch, caplog
+    ):
+        """The deleted-case lists hid through an entire 89-quarter backfill
+        because unclaimed zip members produced no output. A member matching
+        no known pattern is now warned about by name.
+        """
+        monkeypatch.chdir(tmp_path)
+        zip_path = _make_tables_zip(tmp_path / "aers_ascii_2004q1.zip", "2004q1")
+        with zipfile.ZipFile(zip_path, "a") as zf:
+            zf.writestr("SIZE04Q1.TXT", b"record counts\n")
+
+        parse_quarter(zip_path, tmp_path / "parquet")
+
+        assert "matched by no known pattern" in caplog.text
+        assert "SIZE04Q1.TXT" in caplog.text
+
+    def test_documentation_files_are_not_flagged(
+        self, tmp_path, monkeypatch, caplog
+    ):
+        """Every zip carries a Readme and FAQ. Warning about those on every
+        quarter would train the reader to ignore the warning.
+        """
+        monkeypatch.chdir(tmp_path)
+        zip_path = _make_tables_zip(tmp_path / "aers_ascii_2004q1.zip", "2004q1")
+        with zipfile.ZipFile(zip_path, "a") as zf:
+            zf.writestr("Readme.doc", b"docs")
+            zf.writestr("FAQs.pdf", b"docs")
+
+        parse_quarter(zip_path, tmp_path / "parquet")
+
+        assert "matched by no known pattern" not in caplog.text

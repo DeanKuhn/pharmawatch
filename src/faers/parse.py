@@ -14,7 +14,14 @@ from pathlib import Path
 
 import polars as pl  # type:ignore
 
-from faers.manifest import clear_stage, has_stage, mark_stage
+from faers.deleted import (
+    build_deleted_frame,
+    deleted_parquet_path,
+    find_deleted_members,
+    quarter_may_have_deleted,
+    read_deleted_from_zip,
+)
+from faers.manifest import has_stage, mark_stage
 
 logger = logging.getLogger(__name__)
 
@@ -46,11 +53,10 @@ def parse_quarter(z: Path, dest_dir: Path) -> dict[str, Path]:
     logger.info(f"Parsing {quarter} from {z}")
     results: dict[str, Path] = {}
 
-    purged = has_stage(quarter, "purged")
     remaining_tables = [
         table
         for table in FAERS_TABLES
-        if purged or not has_stage(quarter, "parsed", table=table.lower())
+        if not has_stage(quarter, "parsed", table=table.lower())
     ]
     for table in FAERS_TABLES:
         if table not in remaining_tables:
@@ -65,15 +71,13 @@ def parse_quarter(z: Path, dest_dir: Path) -> dict[str, Path]:
         return results
 
     if not z.exists():
-        if has_stage(quarter, "downloaded"):
+        if has_stage(quarter, "local"):
             raise FileNotFoundError(
-                f"{z} is missing but {quarter} has unparsed tables "
-                f"({', '.join(remaining_tables)}) and no zip to parse them from"
-                ", partial parse with a purged source, needs manual recovery."
+                f"{z} is missing but manifest says it should be on disk — "
+                f"unparsed tables: {', '.join(remaining_tables)}"
             )
         raise FileNotFoundError(
-            f"{z} not found and {quarter} isn't marked downloaded -- "
-            "run download_quarter() for this quarter first."
+            f"{z} not found — run download_quarter() first."
         )
 
     with zipfile.ZipFile(z) as zf:
@@ -106,8 +110,10 @@ def parse_quarter(z: Path, dest_dir: Path) -> dict[str, Path]:
             mark_stage(quarter, "parsed", table=table.lower())
             results[table.lower()] = dest_path
 
+        _parse_deleted_list(zf, quarter, dest_dir)
+        _log_unmatched_members(zf, quarter)
+
     mark_stage(quarter, "parsed")
-    clear_stage(quarter, "purged")
     logger.info(
         f"Finished {quarter}: {len(results)}/{len(FAERS_TABLES)} tables"
     )
@@ -115,6 +121,68 @@ def parse_quarter(z: Path, dest_dir: Path) -> dict[str, Path]:
 
 
 # ===== Mid-level Helpers =====
+def _parse_deleted_list(
+    z: zipfile.ZipFile, quarter: str, dest_dir: Path
+) -> None:
+    """Write this quarter's FDA-retracted caseids to deleted.parquet.
+
+    Quarters before 2019q1 ship no such list, which is expected and silent.
+    From 2019q1 on, a missing list is logged as an error rather than passed
+    over -- silently skipping these files is exactly the bug decision 0007
+    exists to close.
+
+    Gap worth knowing about: `parse_quarter` returns early when every table
+    is already marked parsed, so this never runs on a re-parse of an
+    existing quarter. Quarters parsed before decision 0007 got their lists
+    from `scripts/backfill_deleted.py` instead; if you ever clear the
+    manifest and re-parse, run that script afterwards to refill them.
+    """
+    by_source = read_deleted_from_zip(z)
+    if not by_source:
+        if quarter_may_have_deleted(quarter):
+            logger.error(
+                f"{quarter}: no deleted-case member in the zip, but every "
+                "quarter since 2019q1 has shipped one. FDA has likely "
+                "changed the naming convention again -- check the namelist."
+            )
+        return
+
+    dest_path = deleted_parquet_path(quarter, dest_dir)
+    dest_path.parent.mkdir(parents=True, exist_ok=True)
+    frame = build_deleted_frame(by_source)
+    frame.write_parquet(dest_path)
+    mark_stage(quarter, "deleted_parsed")
+    logger.info(f"Wrote {dest_path} ({frame.height} retracted caseids)")
+
+
+def _log_unmatched_members(z: zipfile.ZipFile, quarter: str) -> None:
+    """Log any zip member no pattern claimed.
+
+    The deleted-case lists went unnoticed through an entire 89-quarter
+    backfill because unrecognized members produced no output at all. This
+    makes the next unrecognized file loud instead of invisible.
+    """
+    claimed = {
+        member
+        for table in FAERS_TABLES
+        for member in _table_member_name(z, table, quarter)
+    }
+    claimed.update(find_deleted_members(z.namelist()))
+
+    unmatched = [
+        name
+        for name in z.namelist()
+        if name not in claimed
+        and not name.endswith("/")
+        and not name.lower().endswith((".pdf", ".doc", ".docx"))
+    ]
+    if unmatched:
+        logger.warning(
+            f"{quarter}: zip members matched by no known pattern: "
+            f"{unmatched}"
+        )
+
+
 def _table_member_name(
     z: zipfile.ZipFile, table: str, quarter: str
 ) -> list[str]:

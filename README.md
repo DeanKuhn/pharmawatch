@@ -408,3 +408,229 @@ Monitoring System (AEMS) Quarterly Data Extract Files" — links to the old FAER
 page may go stale. The quarterly extract files themselves (filenames, zip layout)
 are unaffected as of this writing; this is a note to re-check the download URL in
 `src/faers/download.py` if fetches start failing, not an action item yet.
+
+### Deleted-case lists: five naming conventions, three directory capitalizations
+
+FDA withdraws cases for data-quality reasons and publishes the withdrawn
+`caseid`s inside the quarterly zip. These files were skipped in complete
+silence by `parse.py` until 2026-07, because its member matching only
+recognized the seven data tables and returned `None` for anything else
+without logging.
+
+They first appear in **2019q1** — verified absent in 2018q4 and every earlier
+quarter. Since then the name has changed five times and the containing
+directory's capitalization three times:
+
+```
+2019q1-q4   deleted/ADR19Q1DeletedCases.txt   (+ deleted/AllDeletedCases.txt, 2019q1 only)
+2020q1-q2   DELETED/ADR20Q1DeletedCases.txt
+2020q3      Deleted/ADR20Q3DeletedCases.txt
+2020q4-21q3 Deleted/20Q4DeletedCases.txt
+2021q4+     Deleted/DELETE21Q4.txt  ... through Deleted/DELETE26Q1.txt
+```
+
+`src/faers/deleted.py` matches on a deliberately loose pattern — any `.txt`
+whose path contains `delet` in any casing — rather than a table of known
+names, which would have broken five times already. No FAERS data table name
+contains `delet`, so the loose match cannot collide with one.
+
+### The deleted-case lists are neither disjoint nor nested, and contain duplicates
+
+`AllDeletedCases.txt` (2019q1 only) is a cumulative back-file of 83,843
+distinct caseids. It is **not** a superset of the quarterly list shipped
+beside it in the same zip: 9 caseids in `ADR19Q1DeletedCases.txt` are absent
+from it. Consecutive quarterly lists also overlap each other — 2019q2 ∩
+2019q1 = 102 caseids, 2019q3 ∩ 2019q2 = 255.
+
+The files are bare newline-delimited caseids with **no header row**, and are
+not clean:
+
+- `AllDeletedCases.txt` has 83,845 lines for 83,843 distinct caseids — FDA's
+  own retraction list repeats entries.
+- `DELETE24Q4.txt`'s first line is a single space character.
+
+Across all 30 published lists, 237,030 rows collapse to 229,233 distinct
+caseids. `load_deleted_caseids` takes a `DISTINCT` union and assumes nothing
+about subset or disjointness.
+
+### Retractions reach back 15 years, into the pre-FAERS AERS era
+
+The caseid namespace is continuous across the 2012q4 AERS/FAERS rename, so a
+list first published in 2019 invalidates cases parsed from quarters going
+back to 2004. Measured against the local archive:
+
+```
+2004q1:   4 of  58,228 distinct cases retracted (0.01%)
+2008q3:  57 of  91,370                          (0.06%)
+2012q3: 769 of 117,521                          (0.65%)
+2014q3: 497 of 211,308                          (0.24%)
+```
+
+Archive-wide, 104,186 of 20,328,569 distinct cases (0.513%) are retracted.
+A further 125,047 retracted caseids match nothing locally — withdrawn before
+the case ever appeared in a quarterly extract.
+
+The practical consequence is that the canonical dataset is not append-only
+with respect to deletions: each new quarter's list can retroactively
+invalidate data from quarters already published. See
+`docs/decisions/0007-deleted-cases.md`.
+
+### fis.fda.gov hangs on a Range request that negotiates a content encoding
+
+Recovering the deleted-case lists for already-parsed quarters meant fetching
+a few KB out of each published zip rather than re-downloading ~30GB of
+archives. FDA's server accepts such a Range request, returns headers, and
+then never sends the body — the connection simply hangs until the client
+times out. It is not a 4xx, and there is no error to catch.
+
+The trigger is the combination of `Range` with a negotiated content encoding.
+Verified against `faers_ascii_2019q1.zip`:
+
+```
+Accept-Encoding: identity              -> 206, returns in 0.5s
+Accept-Encoding: gzip                  -> hangs, times out
+Accept-Encoding: gzip, deflate         -> hangs, times out
+Accept-Encoding: gzip, deflate, br, zstd (httpx default) -> hangs, times out
+```
+
+A plain GET with the same default encoding works fine (the server gzips the
+response and delivers it), so this is specific to Range + encoding.
+`download.py` never sends a Range header and was never affected, which is why
+the original backfill succeeded. `curl` and stdlib `urllib` happen to work
+only because neither advertises an encoding by default — the bug is invisible
+unless the client is one that does. `deleted.py` sends
+`Accept-Encoding: identity` on every ranged read.
+
+### 2,075 primaryids are shared across more than one caseid
+
+FAERS documents `primaryid` as the unique identifier of a report, and dedup
+originally relied on that: `keep_relation` returned a set of winning
+primaryids and `dedup_table` filtered every table with
+`SEMI JOIN keep ON t.primaryid = k.primaryid`.
+
+Across the full 90-quarter archive, **2,075 primaryids appear under two or more
+different caseids**. Where such a primaryid is the highest-caseversion winner of
+one of its cases, it enters the keep list, and the primaryid-only join then lets
+its row under the *other* case through as well — leaving that case with two
+surviving rows, one of them not the newest version:
+
+```
+primaryid 4652507  caseid 5735234  caseversion 1   <- max version of 5735234, wins
+primaryid 4652507  caseid 5765634  caseversion 1   <- survives on primaryid alone
+primaryid 4659250  caseid 5765634  caseversion 4   <- the real winner of 5765634
+```
+
+Caught by `validate.py` on the 2026-08-01 full-archive load, which is the only
+run that contained all three affected cases — the 8-quarter pre-flight subset
+does not include them. Two invariants tripped: `demo_one_row_per_caseid`
+(17,745,016 rows vs 17,745,013 distinct caseids) and
+`every_survivor_is_max_caseversion` (3 cases). The other two affected cases are
+`5818389` (version 6 surviving past version 8) and `6223147` (version 1 past
+version 2).
+
+The fix is that the keep relation carries the whole `(caseid, primaryid)` pair
+and DEMO matches on both. The child tables still match on primaryid alone —
+pre-2013 they carry `ISR` and no caseid at all, and they don't need it, since a
+surviving primaryid's child rows are correct regardless of which case row it was
+filed under.
+
+### 60 primaryids are the winning version of two different cases at once
+
+A consequence of the above that has no clean resolution. Once the keep relation
+is keyed on `(caseid, primaryid)`, 60 primaryids turn out to win the
+max-caseversion contest for *two* caseids simultaneously (17,745,076 keep rows
+vs 17,745,016 distinct primaryids):
+
+```
+primaryid 6569775 -> caseids [7301091, 7548469]
+primaryid 4607707 -> caseids [5759144, 5865206]
+primaryid 7146022 -> caseids [7723948, 7988079]
+```
+
+Both rows cannot survive without `primaryid` ceasing to be an identity column,
+which the child-table joins depend on. `_resolve_conflicting_primaryid_rows`
+therefore still collapses on primaryid, dropping 60 cases from canonical —
+0.0003% of cases, but a real loss. It is logged at WARNING with examples on every
+load, because once the collapse runs the dropped caseids are simply absent, and
+no downstream count can tell that apart from a case that never existed.
+
+### Blank FOLL_SEQ means "initial report", and reading it as NULL deleted 13.8% of the archive
+
+The single worst data bug found so far, and it passed every validation invariant.
+
+`schema.py` maps the AERS-era `FOLL_SEQ` column to canonical `caseversion`. That
+mapping is right, but `FOLL_SEQ` is a *follow-up sequence number*: FDA populates
+it only on amendments and leaves it blank on an initial report. Blank parses to
+NULL. In `2004q1` that is 57,208 of 65,902 DEMO rows — 86.8%:
+
+```
+FOLL_SEQ value distribution, data/parquet/2004q1/demo.parquet
+  NULL   57,208     <- initial reports, never amended
+  '1'     6,198
+  '2'     1,631
+  '3'       484
+  …
+
+ISR      CASE      FOLL_SEQ  I_F_COD
+4204616  5657190   NULL      I        <- unamended initial report
+4223542  3886288   1         F        <- a follow-up
+```
+
+Archive-wide: 4,055,920 of 24,812,425 raw DEMO rows have no parseable
+caseversion, every one of them in the 35 quarters from `2004q1` to `2012q3`. The
+column becomes mandatory at the `2012q4` FAERS cutover and is never blank after.
+
+`dedup.py::keep_relation` ranked versions with
+`caseversion_int = MAX(caseversion_int) OVER (PARTITION BY caseid)`. `NULL = NULL`
+evaluates to NULL rather than true, so `WHERE is_max` discarded every NULL-version
+row. A case whose *only* row was an unamended initial report never entered the keep
+list — and because the six child tables are filtered by keep membership, its drug,
+reaction, indication, outcome, reporter and therapy rows disappeared with it.
+
+Measured on the 2026-08-01 load: **2,843,481 of 20,588,497 live cases absent from
+canonical, 13.8% of the archive**, of which 2,843,307 have a NULL caseversion on
+every row. What survived from 2004–2011 was only the cases that later received a
+FAERS-era amendment.
+
+Fixed (2026-08-01): `COALESCE(TRY_CAST(caseversion AS BIGINT), 0)`. An initial
+report genuinely *is* version 0 relative to a first follow-up, and a missing
+version can never outrank a real one. This supersedes the 2026-07-20 decision in
+the FOLL_SEQ entry above — the 195 rows with genuinely unparseable values are now
+also treated as version 0 rather than dropped, because 29 cases had no other row
+and were being deleted outright over a typo'd version number.
+
+Nothing caught this. All four FAIL invariants measured canonical against itself
+("rows == distinct caseid" is true of *any* subset), and the six orphan checks
+were tautological — a child row survives only if its primaryid is in keep, and
+every keep primaryid has a DEMO row, so zero was guaranteed by construction while
+the docstring claimed non-zero was expected. `validate.py` now has
+`every_live_case_survives`, which compares the canonical caseid *set* against the
+raw set minus retractions, and the orphan question is asked of the raw data
+instead.
+
+### 7 DEMO rows have no caseid at all, and they shared one partition
+
+Found immediately after the fix above, by the orphan tripwire that had just been
+relabelled. Seven rows in the whole 24.8M-row archive have a NULL `caseid`, all in
+the earliest quarters:
+
+```
+primaryid 4265290, 4274589, 4276661, 4281791, 4283275, 4297346, 4322505
+```
+
+`PARTITION BY caseid` puts all seven in a *single* partition, so the
+max-caseversion filter kept whichever one happened to have the highest version and
+discarded the other six — unrelated reports, years apart, competing as though they
+were versions of one case. The survivor then could not rejoin DEMO, because
+`dedup_table` matches DEMO on the `(caseid, primaryid)` pair and `NULL = NULL` is
+NULL. Its DEMO row was dropped while its child rows were kept: 14 orphaned `reac`
+rows, 3 `drug`, 3 `rpsr`, 3 `ther`, 2 `indi`, 2 `outc` in an 8-quarter preflight.
+
+Fixed (2026-08-01): `keep_relation` excludes NULL-caseid rows explicitly and logs
+them. A row with no caseid has no case identity — it cannot be deduplicated
+against anything and cannot be matched against the retraction lists — so it and
+its children stay out of canonical rather than corrupting the grouping.
+
+Both of these are the same underlying mistake: SQL's three-valued logic silently
+deletes. `NULL = NULL` inside a `WHERE` or a `PARTITION BY` is a filter nobody
+wrote and nothing reports.

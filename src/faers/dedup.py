@@ -5,7 +5,6 @@ import logging
 from pathlib import Path
 
 import duckdb  # type:ignore
-import polars as pl  # type:ignore
 
 logger = logging.getLogger(__name__)
 
@@ -30,8 +29,37 @@ def configure_logging(log_path: Path = Path("logs/dedup.log")) -> None:
 
 
 # ===== Main Functions =====
-def keep_primaryids(tables: dict[str, duckdb.DuckDBPyRelation]) -> list[str]:
-    """Group DEMO by caseid, keep max-caseversion primaryid per case."""
+def keep_relation(
+    tables: dict[str, duckdb.DuckDBPyRelation]
+) -> duckdb.DuckDBPyRelation:
+    """Group DEMO by caseid, keep the max-caseversion (caseid, primaryid) pair.
+
+    A missing or unparseable caseversion counts as version 0, not as a reason
+    to drop the row. Both spellings of "no usable version number" reach here:
+
+      * Blank AERS-era FOLL_SEQ. FOLL_SEQ is a *follow-up sequence number* --
+        populated only on amendments, blank on an initial report -- and
+        schema.py maps it to caseversion. 86.8% of 2004q1 DEMO rows have it
+        blank, and it is blank on 4,055,920 of 24,812,425 rows archive-wide,
+        every one of them in the 35 pre-2012q4 quarters.
+      * 195 rows whose caseversion is present but not a number.
+
+    This used to be `caseversion_int = MAX(caseversion_int) OVER (...)` over
+    rows filtered to parseable versions only. `NULL = NULL` is NULL rather
+    than true, so `WHERE is_max` silently discarded every NULL-version row,
+    and a case whose *only* row was an unamended initial report never entered
+    the keep list at all. Since the child tables are filtered by keep
+    membership, its drug/reac/indi/outc/rpsr/ther rows vanished with it. The
+    2026-08-01 load lost 2,843,481 cases -- 13.8% of the archive -- this way
+    while passing every validation invariant, because every invariant then
+    measured canonical against itself. validate.py's every_live_case_survives
+    exists to make that class of loss visible.
+
+    Coalescing to 0 is safe in both directions: an initial report genuinely
+    *is* version 0 relative to a first follow-up, and a garbage version can
+    never outrank a real one. Where 0 is all a case has, its rows tie and go
+    to _tie_winners rather than disappearing.
+    """
     demo = tables["demo"]
 
     unparseable = demo.query(
@@ -45,80 +73,121 @@ def keep_primaryids(tables: dict[str, duckdb.DuckDBPyRelation]) -> list[str]:
 
     if unparseable:
         logger.warning(
-            f"Dropping {len(unparseable)} row(s) with unparseable caseversion "
-            f"(primaryid(s): {[row[0] for row in unparseable]})"
+            f"{len(unparseable)} row(s) have an unparseable caseversion and "
+            f"are treated as version 0 (primaryid(s): "
+            f"{[row[0] for row in unparseable]})"
         )
 
-    grouped_cte = """
+    caseless = demo.query(
+        "demo", "SELECT primaryid FROM demo WHERE caseid IS NULL"
+    ).fetchall()
+    if caseless:
+        logger.warning(
+            f"Excluding {len(caseless)} row(s) with no caseid -- they have no "
+            f"case identity to deduplicate on and cannot be matched against "
+            f"the retraction lists (primaryid(s): "
+            f"{[row[0] for row in caseless]})"
+        )
+
+    maxver = demo.query(
+        "demo",
+        """
         WITH clean AS (
             SELECT
                 primaryid,
                 caseid,
-                TRY_CAST(caseversion AS BIGINT) AS caseversion_int
+                COALESCE(TRY_CAST(caseversion AS BIGINT), 0) AS caseversion_int
             FROM demo
-            WHERE NOT (caseversion IS NOT NULL
-                AND TRY_CAST(caseversion AS BIGINT) IS NULL)
-        ),
-        ranked AS (
-            SELECT
-                caseid,
-                primaryid,
-                caseversion_int = MAX(caseversion_int)
-                    OVER (PARTITION BY caseid) AS is_max
-            FROM clean
-        ),
-        grouped AS (
-            SELECT caseid, LIST(primaryid) AS tied_pids, COUNT(*) AS n
-            FROM ranked
-            WHERE is_max
-            GROUP BY caseid
+            WHERE caseid IS NOT NULL
         )
+        SELECT caseid, primaryid
+        FROM clean
+        QUALIFY caseversion_int = MAX(caseversion_int) OVER (PARTITION BY caseid)
+        """,
+    )
+
+    untied_alias, tied_alias = _unique_alias(), _unique_alias()
+    untied = maxver.query(
+        untied_alias,
+        f"SELECT caseid, primaryid FROM {untied_alias} "
+        "QUALIFY COUNT(*) OVER (PARTITION BY caseid) = 1",
+    )
+    tied = maxver.query(
+        tied_alias,
+        f"SELECT caseid, primaryid FROM {tied_alias} "
+        "QUALIFY COUNT(*) OVER (PARTITION BY caseid) > 1",
+    )
+
+    return untied.union(_tie_winners(tied, tables))
+
+
+def _pairs_relation(
+    demo: duckdb.DuckDBPyRelation, pairs: list[tuple[str, str]]
+) -> duckdb.DuckDBPyRelation:
+    """A literal (caseid, primaryid) relation on DEMO's connection.
+
+    `demo` supplies only the connection -- a DuckDBPyRelation does not hand
+    one out, and every relation in a query has to come from the same one.
+    The rows are literals, deliberately: _resolve_ties' callers name
+    primaryids that need not exist in DEMO at all (a tie can be decided
+    purely on child-row counts), so selecting them *out of* DEMO would
+    silently drop candidates.
     """
-
-    winners = [
-        row[0]
-        for row in demo.query(
-            "demo", grouped_cte + "SELECT tied_pids[1] FROM grouped WHERE n = 1"
-        ).fetchall()
-    ]
-
-    tied = demo.query(
-        "demo",
-        grouped_cte + "SELECT caseid, tied_pids FROM grouped WHERE n > 1",
-    ).fetchall()
-    logger.info(f"Total ties remaining: {len(tied)}")
-
-    winner_by_caseid = _resolve_ties(tied, tables)
-    for caseid, tied_pids in tied:
-        winner = winner_by_caseid[caseid]
-        logger.info(
-            f"caseid {caseid}: resolved tie among {tied_pids} -> kept {winner}"
+    alias = _unique_alias()
+    if not pairs:
+        return demo.query(
+            alias, f"SELECT caseid, primaryid FROM {alias} WHERE FALSE"
         )
-
-    return winners + list(winner_by_caseid.values())
+    values = ", ".join(
+        f"({_sql_literal(caseid)}, {_sql_literal(primaryid)})"
+        for caseid, primaryid in pairs
+    )
+    return demo.query(
+        alias,
+        f"SELECT DISTINCT caseid, primaryid "
+        f"FROM (VALUES {values}) AS v(caseid, primaryid)",
+    )
 
 
 def dedup_table(
-    name: str, table: duckdb.DuckDBPyRelation, keep: list[str]
+    name: str, table: duckdb.DuckDBPyRelation, keep: duckdb.DuckDBPyRelation
 ) -> duckdb.DuckDBPyRelation:
-    """Filter table to primaryids in keep, drop exact duplicates."""
-    original_height = table.aggregate("count(*) AS count").fetchone()[0]
+    """Filter table to the winners in keep, drop exact duplicates.
 
-    # `keep` runs to tens of millions of primaryids for a full-archive run --
-    # inlining it as SQL literals (`_sql_in_list`) forces DuckDB's parser to
-    # build an AST node per literal, which is what crashed the 89-quarter
-    # run. Wrapping it as a Polars DataFrame and semi-joining against it
-    # instead moves the data across as Arrow, not SQL text, and DuckDB hash-
-    # joins it like any other relation.
-    keep_df = pl.DataFrame({"primaryid": keep})  # noqa: F841 -- read via replacement scan below
+    DEMO matches on the whole (caseid, primaryid) pair; the child tables match
+    on primaryid alone. That asymmetry is forced by the data: a primaryid is
+    not unique to a caseid in FAERS -- 2,075 primaryids span more than one
+    caseid archive-wide -- so matching DEMO on primaryid alone lets a report
+    that wins its own case drag its row under a *second* caseid through the
+    filter, leaving that case with two survivors. Measured on the 2026-08-01
+    load: 3 cases, e.g. primaryid 4652507 is the max version of caseid
+    5735234 and so survived, carrying its version-1 row for caseid 5765634
+    past version 4 (primaryid 4659250), the real winner there.
+
+    The child tables cannot do the same -- pre-2013 they carry `ISR` and no
+    caseid at all (decision 0007) -- and do not need to: their rows belong to
+    a primaryid, so a surviving primaryid's children are correct regardless
+    of which case row it was filed under.
+
+    Returns a lazy relation and deliberately counts nothing. Every
+    `.aggregate("count(*)")` on a relation re-executes the whole pipeline
+    beneath it -- the 90-file union, the semi-join, and the final sort -- so
+    a count taken here purely to log progress costs a second full pass over
+    the archive. `load.py` logs the same figure for free from the written
+    file's Parquet footer, and `validate.py::_row_count_deltas` reports
+    raw-vs-canonical properly as part of the gate.
+    """
     numbered_alias = _unique_alias()
+    join_on = "t.primaryid = k.primaryid"
+    if name == "demo":
+        join_on += " AND t.caseid = k.caseid"
     deduped = table.query(
         numbered_alias,
         f"""
         WITH numbered AS (
-            SELECT *, ROW_NUMBER() OVER () AS __rownum
-            FROM {numbered_alias}
-            WHERE primaryid IN (SELECT primaryid FROM keep_df)
+            SELECT t.*, ROW_NUMBER() OVER () AS __rownum
+            FROM {numbered_alias} t
+            SEMI JOIN keep k ON {join_on}
         )
         SELECT * EXCLUDE (__rownum), MIN(__rownum) AS __rownum
         FROM numbered
@@ -130,18 +199,15 @@ def dedup_table(
         deduped = _resolve_conflicting_primaryid_rows(deduped)
 
     final_alias = _unique_alias()
-    result = deduped.query(
+    return deduped.query(
         final_alias,
         f"SELECT * EXCLUDE (__rownum) FROM {final_alias} ORDER BY __rownum",
     )
 
-    kept = result.aggregate("count(*) AS cnt").fetchone()[0]
-    logger.info(f"{name}: kept {kept}/{original_height} rows after dedup")
-    return result
-
 
 def apply_dedup(
-    tables: dict[str, duckdb.DuckDBPyRelation], keep: list[str]
+    tables: dict[str, duckdb.DuckDBPyRelation],
+    keep: duckdb.DuckDBPyRelation,
 ) -> dict[str, duckdb.DuckDBPyRelation]:
     """Dedup all tables at once (test helper; load.py calls dedup_table
     directly).
@@ -150,51 +216,100 @@ def apply_dedup(
 
 
 # ===== Low-level Helpers =====
+def _tie_winners(
+    tied: duckdb.DuckDBPyRelation,
+    tables: dict[str, duckdb.DuckDBPyRelation],
+) -> duckdb.DuckDBPyRelation:
+    """One winning (caseid, primaryid) per tied caseid, entirely in SQL.
+
+    The ranking is unchanged from the Python version this replaces: most
+    child-table rows, then most non-null DEMO fields, then lowest primaryid.
+    Only the machinery moved.
+
+    It had to move. The old `_resolve_ties` fetchall()'d every tied group into
+    Python and then built a single SQL `IN (...)` literal containing every
+    tied primaryid. That is fine at the 3,192 ties the archive produced while
+    NULL-caseversion rows were being silently dropped. Once those rows are
+    kept (see keep_relation), every unamended AERS-era case whose caseid
+    appears more than once ties at version 0, and the count goes to 595,874
+    ties over 1,510,860 rows -- a ~20MB SQL string, scanned against six child
+    tables. That is the same materialize-into-Python shape behind two of the
+    earlier full-archive OOMs.
+
+    Stays lazy: returns a relation, fetches nothing. Child counts are
+    semi-joined to `tied` first, so the aggregate never touches a child row
+    belonging to an uncontested case.
+    """
+    counted = None
+    for name in CHILD_TABLES:
+        alias = _unique_alias()
+        per_table = tables[name].query(
+            alias,
+            f"SELECT c.primaryid, count(*) AS n FROM {alias} c "
+            "SEMI JOIN tied t ON c.primaryid = t.primaryid "
+            "GROUP BY c.primaryid",
+        )
+        counted = per_table if counted is None else counted.union(per_table)
+
+    child_alias = _unique_alias()
+    child_n = counted.query(
+        child_alias,
+        f"SELECT primaryid, sum(n) AS n FROM {child_alias} GROUP BY primaryid",
+    )
+
+    demo = tables["demo"]
+    richness = " + ".join(
+        f'CASE WHEN "{c}" IS NOT NULL THEN 1 ELSE 0 END' for c in demo.columns
+    ) or "0"
+    demo_alias = _unique_alias()
+    demo_n = demo.query(
+        demo_alias,
+        f"SELECT primaryid, MAX({richness}) AS fields "
+        f"FROM {demo_alias} GROUP BY primaryid",
+    )
+
+    win_alias = _unique_alias()
+    return tied.query(
+        win_alias,
+        f"""
+        SELECT caseid, primaryid FROM (
+            SELECT
+                t.caseid,
+                t.primaryid,
+                ROW_NUMBER() OVER (
+                    PARTITION BY t.caseid
+                    ORDER BY
+                        COALESCE(c.n, 0) DESC,
+                        COALESCE(d.fields, 0) DESC,
+                        TRY_CAST(t.primaryid AS BIGINT) ASC,
+                        t.primaryid ASC
+                ) AS __rk
+            FROM {win_alias} t
+            LEFT JOIN child_n c ON t.primaryid = c.primaryid
+            LEFT JOIN demo_n d ON t.primaryid = d.primaryid
+        )
+        WHERE __rk = 1
+        """,
+    )
+
+
 def _resolve_ties(
     tied_groups: list[tuple[str, list[str]]],
     tables: dict[str, duckdb.DuckDBPyRelation],
 ) -> dict[str, str]:
-    """Break every tie in `tied_groups` at once: same rule as before (most
-    child-table rows, then most non-null demo fields, then lowest
-    primaryid), but child/demo counts are queried once over the union of
-    every tied primaryid in the whole run, instead of once per tie. A run
-    with thousands of ties previously issued 6 (child tables) x N (ties)
-    filtered queries against the full cross-quarter union; this issues 6 +
-    1 total, then does the actual ranking in Python over the (small) tied
-    sets.
+    """Break every tie in `tied_groups` at once, as a dict.
+
+    A thin wrapper over _tie_winners, kept because the tie-break *decisions*
+    are the tested contract and are far easier to state against explicit
+    groups than against a relation. The production path calls _tie_winners
+    directly and never builds this dict.
     """
     if not tied_groups:
         return {}
 
-    all_pids = sorted({pid for _, pids in tied_groups for pid in pids})
-    pid_list = _sql_in_list(all_pids)
-
-    child_counts = {pid: 0 for pid in all_pids}
-    for name in CHILD_TABLES:
-        rows = tables[name].filter(f"primaryid IN ({pid_list})").aggregate(
-            "primaryid, count(*) AS cnt", "primaryid"
-        ).fetchall()
-        for pid, cnt in rows:
-            child_counts[pid] += cnt
-
-    demo_sub = tables["demo"].filter(f"primaryid IN ({pid_list})")
-    pid_idx = demo_sub.columns.index("primaryid")
-    non_null_counts = {
-        row[pid_idx]: sum(1 for v in row if v is not None)
-        for row in demo_sub.fetchall()
-    }
-
-    return {
-        caseid: max(
-            tied_pids,
-            key=lambda pid: (
-                child_counts[pid],
-                non_null_counts.get(pid, 0),
-                -int(pid),
-            ),
-        )
-        for caseid, tied_pids in tied_groups
-    }
+    pairs = [(caseid, pid) for caseid, pids in tied_groups for pid in pids]
+    tied = _pairs_relation(tables["demo"], pairs)
+    return dict(_tie_winners(tied, tables).fetchall())
 
 
 def _pick_richest(
@@ -209,7 +324,20 @@ def _pick_richest(
 def _resolve_conflicting_primaryid_rows(
     demo: duckdb.DuckDBPyRelation,
 ) -> duckdb.DuckDBPyRelation:
-    """Keep richest (most non-null fields) DEMO row per primaryid."""
+    """Keep richest (most non-null fields) DEMO row per primaryid.
+
+    Partitioning by primaryid alone is deliberate but lossy in one specific
+    way. Most conflicts are two rows for the same (primaryid, caseid) that
+    differ in content -- collapsing those is exactly right. But 60 primaryids
+    archive-wide are the winning max-version report of *two different*
+    caseids, and for those, collapsing drops one case from canonical
+    entirely. Both cannot survive without primaryid ceasing to be an identity
+    column, which the child-table joins depend on. FAERS states primaryid is
+    unique; where the data contradicts that, this keeps the join key intact
+    and logs what it cost rather than resolving it silently -- see
+    log_cross_caseid_conflicts, which reports it off the keep list rather than
+    from here, where measuring it would force a second full pass over DEMO.
+    """
     other_cols = [c for c in demo.columns if c not in ("primaryid", "__rownum")]
     richness = " + ".join(
         f'CASE WHEN "{c}" IS NOT NULL THEN 1 ELSE 0 END' for c in other_cols
@@ -233,6 +361,41 @@ def _resolve_conflicting_primaryid_rows(
     )
 
 
-def _sql_in_list(values: list[str]) -> str:
-    """Format list of strings as SQL IN clause."""
-    return ", ".join("'{}'".format(v.replace("'", "''")) for v in values)
+def log_cross_caseid_conflicts(keep: duckdb.DuckDBPyRelation) -> None:
+    """Report cases that will be lost to the primaryid collapse, with examples.
+
+    Measured off the keep relation, not off DEMO. Both carry the fact, but
+    keep is one narrow materialized file while DEMO is the full 90-quarter
+    union -- grouping the latter would force an extra complete pass, the cost
+    dedup_table's docstring exists to warn about.
+
+    This is the only point at which the loss is observable: once the collapse
+    runs, the dropped caseids are simply absent, and no downstream count can
+    distinguish that from a case that never existed.
+    """
+    alias = _unique_alias()
+    rows = keep.query(
+        alias,
+        f"""
+        SELECT primaryid, LIST(DISTINCT caseid) AS caseids
+        FROM {alias}
+        GROUP BY primaryid
+        HAVING COUNT(DISTINCT caseid) > 1
+        """,
+    ).fetchall()
+    if not rows:
+        return
+
+    lost = sum(len(caseids) - 1 for _, caseids in rows)
+    examples = ", ".join(
+        f"primaryid {pid} -> caseids {sorted(caseids)}" for pid, caseids in rows[:3]
+    )
+    logger.warning(
+        f"{len(rows)} primaryid(s) are the winning version of more than one "
+        f"caseid; collapsing to keep primaryid unique drops {lost} case(s) "
+        f"from canonical. Examples: {examples}"
+    )
+
+
+def _sql_literal(value: str) -> str:
+    return "'{}'".format(str(value).replace("'", "''"))

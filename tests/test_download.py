@@ -75,9 +75,11 @@ class TestDownloadQuarter:
         assert result.read_bytes() == FAKE_ZIP_BYTES
         assert not (tmp_path / "faers_ascii_2024q4.zip.tmp").exists()
 
-    def test_skips_if_file_already_exists(self, tmp_path):
+    def test_skips_if_file_already_exists(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
         existing = tmp_path / "faers_ascii_2024q4.zip"
         existing.write_bytes(b"already here, do not touch")
+        mark_stage("2024q4", "local")
 
         calls = []
         def handler(request: httpx.Request) -> httpx.Response:
@@ -90,14 +92,8 @@ class TestDownloadQuarter:
         assert calls == []
         assert existing.read_bytes() == b"already here, do not touch"
 
-    def test_redownloads_purged_quarter_despite_downloaded_flag(self, tmp_path, monkeypatch):
+    def test_redownloads_after_purge(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
-        # Simulates the post-purge state: manifest says "downloaded" already
-        # happened, but the local zip is gone (and the quarter is marked
-        # "purged" to say so) -- download_quarter must not trust
-        # "downloaded" alone.
-        mark_stage("2024q4", "downloaded")
-        mark_stage("2024q4", "purged")
 
         calls = []
         def handler(request: httpx.Request) -> httpx.Response:
