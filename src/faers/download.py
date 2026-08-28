@@ -5,7 +5,7 @@ import logging
 import re
 from pathlib import Path
 
-import httpx  # type:ignore
+import httpx
 
 log = logging.getLogger(__name__)
 log_path = Path("logs/download_reports.log")
