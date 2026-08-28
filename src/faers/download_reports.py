@@ -1,4 +1,4 @@
-"""Fetch quarterly data from FAERS into data/raw diretory."""
+"""Fetch quarterly data from FAERS into data/raw directory."""
 
 import argparse
 import logging
@@ -8,7 +8,15 @@ from pathlib import Path
 import httpx  # type:ignore
 
 log = logging.getLogger(__name__)
-logging.basicConfig(level=logging.INFO)
+log_path = Path("logs/download_reports.log")
+log_path.parent.mkdir(parents=True, exist_ok=True)
+logging.basicConfig(
+    level=logging.INFO,
+    handlers=[
+        logging.FileHandler(log_path),
+        logging.StreamHandler(),
+    ],
+)
 
 FAERS_URL = "https://fis.fda.gov/content/Exports/{prefix}{quarter}.zip"
 QUARTER_RE = re.compile(r"^\d{4}q[1-4]$", re.IGNORECASE)
@@ -23,12 +31,12 @@ def download_quarter() -> None:
     dest = Path(args.dest)
     dest.mkdir(parents=True, exist_ok=True)
 
-    not_downloaded: dict[str, str] = {}
+    failures: dict[str, str] = {}
     for quarter in args.quarters:
         if not QUARTER_RE.match(quarter):
             log.warning(f"Quarter {quarter} does not match regex validation.")
             quarter = quarter.upper()
-            not_downloaded[quarter] = "Failed regex validation"
+            failures[quarter] = "Failed regex validation"
             continue
 
         quarter = quarter.upper()
@@ -36,7 +44,6 @@ def download_quarter() -> None:
 
         if out.exists():
             log.info(f"Skipping {quarter}, already exists locally.")
-            not_downloaded[quarter] = "Already exists locally"
             continue
 
         year = int(quarter[:4])
@@ -48,7 +55,9 @@ def download_quarter() -> None:
         partial = out.with_suffix(".part")
 
         try:
-            with httpx.stream("GET", url, follow_redirects=True, timeout=120) as r:
+            with httpx.stream(
+                "GET", url, follow_redirects=True, timeout=httpx.Timeout(10, read=300)
+            ) as r:
                 r.raise_for_status()
                 with open(partial, "wb") as f:
                     f.writelines(r.iter_bytes())
@@ -56,17 +65,19 @@ def download_quarter() -> None:
             partial.rename(out)
 
         except httpx.HTTPError as e:
-            not_downloaded[quarter] = str(e)
+            failures[quarter] = str(e)
             log.warning(f"Failed to download {quarter}: {e}")
+            partial.unlink(missing_ok=True)
             continue
 
         log.info(f"Downloaded {quarter} successfully.")
 
-    log.info("Download complete, quarters not downloaded:")
-    for quarter, reason in not_downloaded.items():
-        log.info(f"    {quarter}: {reason}")
+    log.info("Download complete!")
+    if failures:
+        log.info("Quarters not downloaded:")
+        for quarter, reason in failures.items():
+            log.info(f"    {quarter}: {reason}")
 
 
 if __name__ == "__main__":
     download_quarter()
-
