@@ -136,7 +136,7 @@ def parse_quarter():
         "--download_dir", default="data/raw", help="location of downloaded reports"
     )
     parser.add_argument(
-        "--parquet-dest", default="data/parquet", help="location of parsed reports"
+        "--parquet_dest", default="data/parquet", help="location of parsed reports"
     )
     args = parser.parse_args()
 
