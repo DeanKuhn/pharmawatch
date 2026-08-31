@@ -1,11 +1,11 @@
 """R2 credential handling and low-level Parquet I/O."""
 
+import os
 from dataclasses import dataclass
 
-import os
-import duckdb  # type:ignore
-import polars as pl  # type:ignore
-from dotenv import load_dotenv  # type:ignore
+import duckdb
+import polars as pl
+from dotenv import load_dotenv
 
 
 @dataclass(frozen=True)
@@ -26,14 +26,11 @@ def load_r2_config() -> R2Config:
         endpoint_url=r2_endpoint_url,
         access_key_id=r2_access_key_id,
         secret_access_key=r2_secret_access_key,
-        bucket=r2_bucket_name)
+        bucket=r2_bucket_name,
+    )
 
 
 def storage_options(config: R2Config) -> dict:
-    """Translate R2Config into an S3-compatible endpoint:
-    aws_endpoint_url, aws_access_key_id, aws_secret_access_key, and
-    aws_region='auto'
-    """
     return {
         "aws_endpoint_url": config.endpoint_url,
         "aws_access_key_id": config.access_key_id,
@@ -45,30 +42,27 @@ def storage_options(config: R2Config) -> dict:
 def raw_key(table: str, quarter: str) -> str:
     return f"faers/raw/{quarter}/{table}.parquet"
 
+
 def canonical_key(table: str) -> str:
     return f"faers/canonical/{table}.parquet"
 
 
-def configure_duckdb_r2(
-    con: duckdb.DuckDBPyConnection, config: R2Config
-) -> None:
-    """Point `con` at R2 over the httpfs extension"""
+def configure_duckdb_r2(con: duckdb.DuckDBPyConnection, config: R2Config) -> None:
     con.install_extension("httpfs")
     con.load_extension("httpfs")
-    con.execute(f"SET s3_endpoint = \
-        '{config.endpoint_url.removeprefix('https://')}'")
+    con.execute(f"SET s3_endpoint = '{config.endpoint_url.removeprefix('https://')}'")
     con.execute(f"SET s3_access_key_id = '{config.access_key_id}'")
     con.execute(f"SET s3_secret_access_key = '{config.secret_access_key}'")
     con.execute("SET s3_region = 'auto'")
     con.execute("SET s3_url_style = 'path'")
 
 
-def upload_parquet(
-    rel: duckdb.DuckDBPyRelation, key: str, config: R2Config
-) -> None:
+def upload_parquet(rel: duckdb.DuckDBPyRelation, key: str, config: R2Config) -> None:
     rel.write_parquet(f"s3://{config.bucket}/{key}")
 
 
 def download_parquet(key: str, config: R2Config) -> pl.DataFrame:
-    return pl.read_parquet(f"s3://{config.bucket}/{key}",
-        storage_options=storage_options(config))
+    return pl.read_parquet(
+        f"s3://{config.bucket}/{key}", storage_options=storage_options(config)
+    )
+
