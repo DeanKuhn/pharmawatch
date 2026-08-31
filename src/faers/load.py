@@ -22,6 +22,7 @@ logging.basicConfig(
 
 def load():
     parser = argparse.ArgumentParser(description="Load deduped parquet reports to r2.")
+    parser.add_argument("tables", nargs="*", help="e.g. demo, drug, default is all")
     parser.add_argument(
         "--deduped_dir", default="data/deduped", help="location of deduped parquets"
     )
@@ -36,7 +37,11 @@ def load():
     con = duckdb.connect()
     configure_duckdb_r2(con, config)
 
-    tables = ["demo", "drug", "reac", "indi", "outc", "rpsr", "ther"]
+    if not args.tables:
+        tables = ["demo", "drug", "reac", "indi", "outc", "rpsr", "ther"]
+    else:
+        tables = [t for t in args.tables]
+
     for table in tables:
         local_path = deduped_dir / f"{table}.parquet"
         if not local_path.exists():
