@@ -3,11 +3,13 @@ data/
 __pycache__/
 *.pyc
 .pytest_cache/
+.ruff_cache/
+.claude/
 
 .env
 .tmp
 .venv
 
 logs/
-docs/personal/
-scratchpad/
+docs/
+scripts/
