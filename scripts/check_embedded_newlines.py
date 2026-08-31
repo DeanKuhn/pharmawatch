@@ -1,10 +1,5 @@
-"""Check downloaded FAERS quarters for embedded \\r bytes or short-row
-patterns consistent with an embedded newline mid-field (which would corrupt
-`_check_ragged_lines`'s short-row-is-benign assumption in src/faers/parse.py).
+"""Check downloaded FAERS quarters for embedded \\r bytes or short rows."""
 
-Run against whatever quarters are currently in data/raw/:
-    uv run python scripts/check_embedded_newlines.py
-"""
 import re
 import zipfile
 from pathlib import Path
@@ -52,7 +47,9 @@ def main():
                     if cr_count or short_rows:
                         print(f"{quarter} {table} ({member}):")
                         print(f"  expected_fields={expected} lines={len(data_lines)}")
-                        print(f"  \\r bytes={cr_count} short_rows={short_rows} surplus_rows={surplus_rows}")
+                        print(
+                            f"  \\r bytes={cr_count} short_rows={short_rows} surplus_rows={surplus_rows}"
+                        )
                         for ln, n, snippet in short_examples:
                             print(f"    line {ln}: fields={n} snippet={snippet!r}")
                         print()
