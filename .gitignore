@@ -1,17 +1,7 @@
-data/raw/
-data/parquet/
-data/cleansed/
-data/merged/
-data/duckdb_spill/
-data/canonical/
-data/preflight/
-!data/raw/.gitkeep
-!data/parquet/.gitkeep
-
+data/
 
 __pycache__/
 *.pyc
-.vscode/
 .pytest_cache/
 
 .env
