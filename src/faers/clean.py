@@ -58,11 +58,13 @@ def clean_parquet() -> None:
         for table in tables:
             cleansed_path = quarter_dir / f"{table}.parquet"
             if cleansed_path.exists():
-                log.info(f"Cleansed table already exists for {quarter} {table}, skipping...")
+                log.info(
+                    f"Cleansed table already exists for {quarter} {table}, skipping..."
+                )
                 continue
 
             raw_path = parquet_dir / quarter / f"{table}.parquet"
-            
+
             # Rename column names consistently
             sql = canonical_select_sql(con, table, quarter, str(raw_path))
             rel = con.sql(sql)
@@ -85,7 +87,7 @@ def clean_parquet() -> None:
                 if after_nulls - after_deleted:
                     log.info(f"Removed {after_nulls - after_deleted} deleted caseids")
 
-            rel.write_parquet(str(cleansed_path))
+            rel.write_parquet(str(cleansed_path), compression="zstd")
 
 
 def _load_deleted_caseids(parquet_dir: Path) -> set[str]:
