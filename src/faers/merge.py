@@ -54,7 +54,7 @@ def merge() -> None:
             paths = sorted(cleansed_dir.glob(f"*/{table}.parquet"))
         
         rel = con.read_parquet([str(p) for p in paths], union_by_name=True)
-        rel.write_parquet(str(merged_dir / f"{table}.parquet"))
+        rel.write_parquet(str(merged_dir / f"{table}.parquet"), compression="zstd")
         log.info(f"Merged {table}: {len(paths)} quarters, {rel.count("*").fetchall()[0][0]} rows")
 
 
