@@ -1,5 +1,7 @@
 data/raw/
 data/parquet/
+data/cleansed/
+data/merged/
 data/duckdb_spill/
 data/canonical/
 data/preflight/
