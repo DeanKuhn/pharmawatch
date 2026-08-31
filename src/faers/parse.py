@@ -226,12 +226,13 @@ def parse_quarter():
 
             if unmatched:
                 log.warning(f"{quarter}: unrecognized zip members: {unmatched}")
-                for quarter, reason in failed_quarters.items():
-                    log.warning("Quarters failed to parse:")
-                    log.warning(f"    {quarter}: {reason}")
-                for quarter, table_list in failed_tables.items():
-                    log.warning("Tables failed to parse:")
-                    log.warning(f"    {quarter}: {table_list}")
+
+            for quarter, reason in failed_quarters.items():
+                log.warning("Quarters failed to parse:")
+                log.warning(f"    {quarter}: {reason}")
+            for quarter, table_list in failed_tables.items():
+                log.warning("Tables failed to parse:")
+                log.warning(f"    {quarter}: {table_list}")
 
 
 def _find_table_members(zf, table, quarter):
