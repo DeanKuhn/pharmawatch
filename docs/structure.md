@@ -73,15 +73,12 @@ For the era-boundary column details, use the `faers-schema-eras` skill.
 - `src/faers/download.py` — fetch quarterly extracts + API samples
 - `src/faers/parse.py` — extract files -> Parquet (raw, per-era column names, unmodified)
 - `src/faers/schema.py` — per-era column crosswalk to one canonical schema
-- `src/faers/dedup.py` — case-version deduplication (highest-stakes code; test-first)
-- `src/faers/deleted.py` — FDA-retracted caseid lists: locate in the zip, parse,
-  materialize (decision 0007). Excluded from canonical, kept verbatim in raw.
-- `src/faers/validate.py` — reconciliation gate over the canonical output; four
-  FAIL invariants, run after every load before anything downstream is built
-- `src/faers/load.py` — Parquet -> R2 dedup sync; cross-quarter union built on DuckDB
-  relations, not Polars concat (decision 0006, implemented)
-- `sql/staging_schema.sql` — retired; Postgres holds only pgvector embeddings
-  (decision 0005)
+- `src/faers/clean.py` — canonical rename, null/deleted caseid removal, row dedup
+- `src/faers/merge.py` — union all quarters per table into single parquet files
+- `src/faers/dedup.py` — case-version deduplication across all quarters
+- `src/faers/validate.py` — reconciliation gate over deduped output; five FAIL
+  invariants, run after dedup before load
+- `src/faers/load.py` — upload deduped Parquet to R2 as canonical source of truth
+- `src/faers/r2.py` — R2 credential handling and Parquet I/O (httpfs, upload)
 - `notebooks/01_explore_mess.ipynb`
-- `tests/test_dedup.py`
 - `data/raw/`, `data/parquet/` — gitignored, immutable once written
