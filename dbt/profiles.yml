@@ -1,0 +1,11 @@
+pharmawatch:
+  target: dev
+  outputs:
+    dev:
+      type: duckdb
+      path: "pharmawatch_dev.duckdb"
+      threads: 4
+    prod:
+      type: duckdb
+      path: "md:pharmawatch"
+      threads: 4

@@ -1,0 +1,15 @@
+name: pharmawatch
+version: "1.0.0"
+profile: pharmawatch
+
+model-paths: ["models"]
+clean-targets: ["target", "dbt_packages"]
+
+models:
+  pharmawatch:
+    staging:
+      +materialized: view
+    int:
+      +materialized: ephemeral
+    mart:
+      +materialized: table

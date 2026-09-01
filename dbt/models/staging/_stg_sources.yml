@@ -1,0 +1,23 @@
+version: 2
+
+sources:
+  - name: faers
+    description: Deduped FAERS adverse event data (Parquet on r2)
+    meta:
+      # for now, using local location (deduped folder)
+      external_location: "../data/deduped/{name}.parquet"
+    tables:
+      - name: demo
+        description: Case demographics
+      - name: drug
+        description: Drugs involved
+      - name: reac
+        description: Reactions per case
+      - name: outc
+        description: Outcomes for the case
+      - name: ther
+        description: Therapy dates per drug-case pair
+      - name: indi
+        description: Indications per drug-case pair
+      - name: rpsr
+        description: Reporting sources
