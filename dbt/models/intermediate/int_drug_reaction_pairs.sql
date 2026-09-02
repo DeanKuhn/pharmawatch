@@ -1,0 +1,24 @@
+-- join drug on reactions on pid, primary suspect only
+-- grain = one row per pdi, name, and reaction
+-- IMPORTANT: separate doses per drug will be merged into one via group by
+
+with drug_reaction_pairs as (
+
+	select
+		d.primaryid,
+		d.drugname,
+		max(d.route) as route,
+		r.reaction_pt
+
+	from {{ ref('stg_drug') }} as d
+
+	inner join {{ ref('stg_reac') }} as r
+		on d.primaryid = r.primaryid
+
+	where d.role_cod = 'PS'
+
+	group by d.primaryid, d.drugname, r.reaction_pt
+
+)
+
+select * from drug_reaction_pairs
