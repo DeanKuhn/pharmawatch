@@ -1,12 +1,37 @@
 -- count the number of pids per drug + reaction pair
-with pair_counts as (
+with  __dbt__cte__int_drug_reaction_pairs as (
+-- join drug on reactions on pid, primary suspect only
+-- grain = one row per pdi, name, and reaction
+-- IMPORTANT: separate doses per drug will be merged into one via group by
+
+with drug_reaction_pairs as (
+
+	select
+		d.primaryid,
+		d.drugname,
+		max(d.route) as route,
+		r.reaction_pt
+
+	from "pharmawatch_dev"."main"."stg_drug" as d
+
+	inner join "pharmawatch_dev"."main"."stg_reac" as r
+		on d.primaryid = r.primaryid
+
+	where d.role_cod = 'PS'
+
+	group by d.primaryid, d.drugname, r.reaction_pt
+
+)
+
+select * from drug_reaction_pairs
+), pair_counts as (
 
 	select
 		drugname,
 		reaction_pt,
 		count(distinct primaryid) as a
 	
-	from {{ ref('int_drug_reaction_pairs') }}
+	from __dbt__cte__int_drug_reaction_pairs
 	group by drugname, reaction_pt
 
 ),
@@ -18,7 +43,7 @@ drug_counts as (
 		drugname,
 		count(distinct primaryid) as drug_total
 	
-	from {{ ref('int_drug_reaction_pairs') }}
+	from __dbt__cte__int_drug_reaction_pairs
 	group by drugname
 
 ),
@@ -30,7 +55,7 @@ reaction_counts as (
 		reaction_pt,
 		count(distinct primaryid) as reaction_total
 	
-	from {{ ref('int_drug_reaction_pairs') }}
+	from __dbt__cte__int_drug_reaction_pairs
 	group by reaction_pt
 
 ),
@@ -40,7 +65,7 @@ total_cases as (
 
 	select count(distinct primaryid) as n
 
-	from {{ ref('int_drug_reaction_pairs') }}
+	from __dbt__cte__int_drug_reaction_pairs
 
 ),
 

@@ -1,9 +1,18 @@
--- one row per unique outcome_code (ft. decoded label)
+
+  
+    
+    
+
+    create  table
+      "pharmawatch_dev"."main"."dim_outcome__dbt_tmp"
+  
+    as (
+      -- one row per unique outcome_code (ft. decoded label)
 
 with dim_outcome as (
 
 	select distinct
-		{{ dbt_utils.generate_surrogate_key(['outcome_code']) }} as outcome_key,
+		md5(cast(coalesce(cast(outcome_code as TEXT), '_dbt_utils_surrogate_key_null_') as TEXT)) as outcome_key,
 		outcome_code,
 		
 		case
@@ -16,8 +25,11 @@ with dim_outcome as (
 			else 'Other'
 		end as outcome_desc 
 
-	from {{ ref('stg_outc') }}
+	from "pharmawatch_dev"."main"."stg_outc"
 
 )
 
 select * from dim_outcome
+    );
+  
+  
