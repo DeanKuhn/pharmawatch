@@ -5,7 +5,11 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 .claude/
+
 dbt/pharmawatch_dev.duckdb
+dbt/targets/
+dbt/.user.yml
+dbt/profiles.yml
 
 .env
 .tmp
