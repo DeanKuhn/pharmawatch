@@ -131,7 +131,7 @@ def _parse_deleted(raw: bytes) -> pl.DataFrame:
 
 def parse_quarter():
     parser = argparse.ArgumentParser(description="Parse downloaded FAERS reports.")
-    parser.add_argument("quarters", nargs="+", help="e.g. 2024q4 2020q1")
+    parser.add_argument("quarters", nargs="*", help="e.g. 2024q4 2020q1")
     parser.add_argument(
         "--download_dir", default="data/raw", help="location of downloaded reports"
     )
@@ -152,7 +152,13 @@ def parse_quarter():
 
     failed_quarters: dict[str, str] = {}
     failed_tables: dict[str, list[str]] = {}
-    for quarter in args.quarters:
+
+    if not args.quarters:
+        quarters = [p.stem for p in sorted(download_dir.glob("*.zip"))]
+    else:
+        quarters = args.quarters
+
+    for quarter in quarters:
         if not QUARTER_RE.match(quarter):
             log.warning(f"Quarter {quarter} does not match regex validation.")
             quarter = quarter.upper()

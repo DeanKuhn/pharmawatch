@@ -23,7 +23,7 @@ logging.basicConfig(
 
 def clean_parquet() -> None:
     parser = argparse.ArgumentParser(description="Clean downloaded parquet reports.")
-    parser.add_argument("quarters", nargs="+", help="e.g. 2024q4 2020q1")
+    parser.add_argument("quarters", nargs="*", help="e.g. 2024q4 2020q1")
     parser.add_argument(
         "--parquet_dir", default="data/parquet", help="location of downloaded parquets"
     )
@@ -49,7 +49,12 @@ def clean_parquet() -> None:
     con.execute("CREATE TEMP TABLE deleted (caseid VARCHAR)")
     con.executemany("INSERT INTO deleted VALUES (?)", [(c,) for c in deleted])
 
-    for quarter in args.quarters:
+    if not args.quarters:
+        quarters = [p.name for p in sorted(parquet_dir.iterdir()) if p.is_dir()]
+    else:
+        quarters = args.quarters
+
+    for quarter in quarters:
         quarter = quarter.upper()
         log.info(f"Starting cleaning for all tables in {quarter}:")
         quarter_dir = cleansed_dir / quarter

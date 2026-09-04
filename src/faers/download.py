@@ -3,6 +3,7 @@
 import argparse
 import logging
 import re
+from datetime import UTC, datetime
 from pathlib import Path
 
 import httpx
@@ -24,15 +25,24 @@ QUARTER_RE = re.compile(r"^\d{4}q[1-4]$", re.IGNORECASE)
 
 def download_quarter() -> None:
     parser = argparse.ArgumentParser(description="Download FAERS quarterly reports.")
-    parser.add_argument("quarters", nargs="+", help="e.g. 2024q4 2020q1")
+    parser.add_argument("quarters", nargs="*", help="e.g. 2024q4 2020q1, default all")
     parser.add_argument("--dest", default="data/raw", help="download destination")
     args = parser.parse_args()
 
     dest = Path(args.dest)
     dest.mkdir(parents=True, exist_ok=True)
 
+    if not args.quarters:
+        quarters = []
+        for y in range(2004, datetime.now(tz=UTC).year + 1):
+            for q in range(1, 5):
+                quarters.append(f"{y}Q{q}")
+    else:
+        quarters = args.quarters
+
     failures: dict[str, str] = {}
-    for quarter in args.quarters:
+
+    for quarter in quarters:
         if not QUARTER_RE.match(quarter):
             log.warning(f"Quarter {quarter} does not match regex validation.")
             quarter = quarter.upper()
