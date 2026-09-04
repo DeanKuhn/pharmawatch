@@ -4,8 +4,8 @@ sources:
   - name: faers
     description: "FDA Adverse Event Reporting System (FAERS) — deduped Parquet files from the PharmaWatch pipeline."
     meta:
-      # for now, using local location (deduped folder)
-      external_location: "../data/deduped/{name}.parquet"
+      # default is local, with var use_r2 is r2
+      external_location: "{% if var('use_r2', false) %}https://pub-2ac3f030bdbe43bdac000ac58c79ba86.r2.dev/faers/canonical/{name}.parquet{% else %}../data/deduped/{name}.parquet{% endif %}"
     tables:
       - name: demo
         description: "Case demographics — one row per deduplicated adverse event case"
