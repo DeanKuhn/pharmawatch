@@ -12,5 +12,7 @@ dbt/pharmawatch_dev.duckdb
 .venv
 
 logs/
-docs/
+docs/personal/
+docs/decisions/
+docs/pharmawatch_sprint_brief.md
 scripts/

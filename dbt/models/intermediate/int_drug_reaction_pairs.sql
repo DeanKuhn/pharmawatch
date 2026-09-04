@@ -1,5 +1,3 @@
--- join drug on reactions on pid, primary suspect only
--- grain = one row per pdi, name, and reaction
 -- IMPORTANT: separate doses per drug will be merged into one via group by
 
 with drug_reaction_pairs as (

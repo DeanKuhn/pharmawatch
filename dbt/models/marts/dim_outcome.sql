@@ -1,5 +1,3 @@
--- one row per unique outcome_code (ft. decoded label)
-
 with dim_outcome as (
 
 	select distinct

@@ -2,44 +2,154 @@ version: 2
 
 models:
   - name: stg_demo
+    description: "Case demographics from FAERS DEMO table. One row per deduplicated case."
     columns:
       - name: primaryid
+        description: "Unique case identifier (post-2012 FAERS primary key)"
         tests:
           - not_null
           - unique
+      - name: caseid
+        description: "Legacy case identifier (pre-2012 primary key)"
+      - name: caseversion
+        description: "Version number of this case report (integer, defaults to 0)"
+      - name: i_f_code
+        description: "Initial or follow-up report indicator"
+      - name: event_dt
+        description: "Date the adverse event occurred"
+      - name: fda_dt
+        description: "Date the FDA received the report"
+      - name: init_fda_dt
+        description: "Date the FDA received the initial report"
+      - name: death_dt
+        description: "Date of death if applicable"
+      - name: age
+        description: "Patient age as reported (raw numeric, see age_cod for unit)"
+      - name: age_cod
+        description: "Unit of age: YR, DEC, MON, WK, DY, HR"
+      - name: age_grp
+        description: "FDA age group code"
+      - name: sex
+        description: "Patient sex as reported (M, F, or null)"
+      - name: wt
+        description: "Patient weight as reported (raw numeric)"
+      - name: wt_cod
+        description: "Unit of weight (KG, LBS, etc.)"
+      - name: rept_cod
+        description: "Report type code (expedited, periodic, etc.)"
+      - name: occp_cod
+        description: "Reporter occupation code (MD, PH, CN, etc.)"
+      - name: reporter_country
+        description: "Two-letter country code of the reporter"
+      - name: occr_country
+        description: "Two-letter country code where the event occurred"
+      - name: mfr_sndr
+        description: "Manufacturer or sender organization"
 
   - name: stg_drug
+    description: "Drugs involved in adverse event cases. One or more rows per case."
     columns:
       - name: primaryid
+        description: "Case identifier (FK to stg_demo)"
         tests:
           - not_null
+      - name: caseid
+        description: "Legacy case identifier"
+      - name: drug_seq
+        description: "Sequence number of the drug within the case"
+      - name: role_cod
+        description: "Drug role: PS (primary suspect), SS (secondary suspect), C (concomitant), I (interacting)"
+      - name: drugname
+        description: "Drug name as reported (not normalized)"
+      - name: route
+        description: "Route of administration (oral, intravenous, etc.)"
+      - name: dose_amt
+        description: "Dose amount as reported"
+      - name: dose_unit
+        description: "Unit of dose (MG, ML, etc.)"
+      - name: dose_form
+        description: "Dosage form (tablet, injection, etc.)"
+      - name: dose_freq
+        description: "Dosing frequency"
+      - name: prod_ai
+        description: "Active ingredient(s)"
+      - name: nda_num
+        description: "NDA/ANDA number if available"
+      - name: lot_number
+        description: "Drug lot number (coalesced from lot_num and lot_nbr)"
+      - name: dechal
+        description: "Dechallenge outcome (did reaction abate when drug stopped?)"
+      - name: rechal
+        description: "Rechallenge outcome (did reaction recur when drug restarted?)"
+      - name: exp_dt
+        description: "Drug expiration date"
 
   - name: stg_reac
+    description: "Adverse reactions reported per case. One row per case-reaction pair."
     columns:
       - name: primaryid
+        description: "Case identifier (FK to stg_demo)"
         tests:
           - not_null
+      - name: caseid
+        description: "Legacy case identifier"
+      - name: reaction_pt
+        description: "MedDRA Preferred Term for the reaction"
 
   - name: stg_outc
+    description: "Case outcomes. One row per case-outcome pair."
     columns:
       - name: primaryid
+        description: "Case identifier (FK to stg_demo)"
         tests:
           - not_null
+      - name: caseid
+        description: "Legacy case identifier"
+      - name: outcome_code
+        description: "FDA outcome code: DE, HO, LT, DS, CA, RI, OT"
 
   - name: stg_indi
+    description: "Drug indications — what each drug was prescribed for. One row per case-drug-indication."
     columns:
       - name: primaryid
+        description: "Case identifier (FK to stg_demo)"
         tests:
           - not_null
+      - name: caseid
+        description: "Legacy case identifier"
+      - name: indi_drug_seq
+        description: "Drug sequence number this indication applies to (FK to stg_drug.drug_seq within the same case)"
+      - name: indication_pt
+        description: "MedDRA Preferred Term for the indication"
 
   - name: stg_rpsr
+    description: "Report sources — who submitted the adverse event report. One row per case."
     columns:
       - name: primaryid
+        description: "Case identifier (FK to stg_demo)"
         tests:
           - not_null
+      - name: caseid
+        description: "Legacy case identifier"
+      - name: report_source_code
+        description: "Source of the report (FGN, SDY, etc.)"
 
   - name: stg_ther
+    description: "Therapy dates per drug-case pair. One row per therapy period."
     columns:
       - name: primaryid
+        description: "Case identifier (FK to stg_demo)"
         tests:
           - not_null
+      - name: caseid
+        description: "Legacy case identifier"
+      - name: drug_seq
+        description: "Drug sequence number this therapy applies to"
+      - name: start_dt
+        description: "Therapy start date"
+      - name: end_dt
+        description: "Therapy end date"
+      - name: dur
+        description: "Duration of therapy (raw numeric)"
+      - name: dur_cod
+        description: "Unit of therapy duration (YR, MON, WK, DY, HR)"

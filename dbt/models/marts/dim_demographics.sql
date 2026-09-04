@@ -1,5 +1,3 @@
--- one row per unique age, sex, and reporter country
-
 with dim_demographics as (
 
 	select distinct

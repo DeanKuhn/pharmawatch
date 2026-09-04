@@ -1,5 +1,3 @@
--- one row per unique reaction
-
 with dim_reaction as (
 
 	select distinct

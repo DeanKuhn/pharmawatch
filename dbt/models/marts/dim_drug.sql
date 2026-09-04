@@ -1,5 +1,3 @@
--- one row per unique drugname, from int_drug_reaction_pairs
-
 with dim_drug as (
 
 	select distinct
