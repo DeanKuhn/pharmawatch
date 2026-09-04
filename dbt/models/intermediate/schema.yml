@@ -1,0 +1,27 @@
+version: 2
+
+models:
+  - name: int_drug_reaction_pairs
+    description: "One row per (case, drug, reaction) for primary suspect drugs"
+    columns:
+      - name: primaryid
+        tests:
+          - not_null
+
+  - name: int_case_demographics
+    description: "Demographics with normalized age and sex"
+    columns:
+      - name: primaryid
+        tests:
+          - not_null
+          - unique
+      - name: age_group
+        tests:
+          - accepted_values:
+              arguments:
+                values: ['0-17', '18-44', '45-64', '65+', 'Unknown']
+      - name: sex
+        tests:
+          - accepted_values:
+              arguments:
+                values: ['Male', 'Female', 'Unknown']

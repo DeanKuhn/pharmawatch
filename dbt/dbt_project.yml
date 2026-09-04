@@ -9,7 +9,7 @@ models:
   pharmawatch:
     staging:
       +materialized: view
-    int:
+    intermediate:
       +materialized: ephemeral
-    mart:
+    marts:
       +materialized: table

@@ -1,0 +1,102 @@
+version: 2
+
+models:
+  - name: dim_drug
+    columns:
+      - name: drug_key
+        tests:
+          - unique
+          - not_null
+      - name: drugname
+        tests:
+          - not_null
+          - unique
+
+  - name: dim_reaction
+    columns:
+      - name: reaction_key
+        tests:
+          - unique
+          - not_null
+      - name: reaction_pt
+        tests:
+          - not_null
+          - unique
+
+  - name: dim_outcome
+    columns:
+      - name: outcome_key
+        tests:
+          - unique
+          - not_null
+      - name: outcome_code
+        tests:
+          - not_null
+          - unique
+          - accepted_values:
+              arguments:
+                values: ['DE', 'HO', 'LT', 'DS', 'CA', 'RI', 'OT']
+
+  - name: dim_demographics
+    columns:
+      - name: demographics_key
+        tests:
+          - unique
+          - not_null
+
+  - name: fct_adverse_events
+    columns:
+      - name: primaryid
+        tests:
+          - not_null
+      - name: drug_key
+        tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_drug')
+                field: drug_key
+      - name: reaction_key
+        tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_reaction')
+                field: reaction_key
+      - name: demographics_key
+        tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_demographics')
+                field: demographics_key
+
+  - name: mart_prr
+    columns:
+      - name: drugname
+        tests:
+          - not_null
+      - name: reaction_pt
+        tests:
+          - not_null
+      - name: case_count
+        tests:
+          - not_null
+      - name: prr
+        tests:
+          - not_null
+
+  - name: mart_ror
+    columns:
+      - name: drugname
+        tests:
+          - not_null
+      - name: reaction_pt
+        tests:
+          - not_null
+      - name: case_count
+        tests:
+          - not_null
+      - name: ror
+        tests:
+          - not_null

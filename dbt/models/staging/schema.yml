@@ -1,0 +1,45 @@
+version: 2
+
+models:
+  - name: stg_demo
+    columns:
+      - name: primaryid
+        tests:
+          - not_null
+          - unique
+
+  - name: stg_drug
+    columns:
+      - name: primaryid
+        tests:
+          - not_null
+
+  - name: stg_reac
+    columns:
+      - name: primaryid
+        tests:
+          - not_null
+
+  - name: stg_outc
+    columns:
+      - name: primaryid
+        tests:
+          - not_null
+
+  - name: stg_indi
+    columns:
+      - name: primaryid
+        tests:
+          - not_null
+
+  - name: stg_rpsr
+    columns:
+      - name: primaryid
+        tests:
+          - not_null
+
+  - name: stg_ther
+    columns:
+      - name: primaryid
+        tests:
+          - not_null

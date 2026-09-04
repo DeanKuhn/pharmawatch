@@ -21,4 +21,3 @@ with dim_outcome as (
 )
 
 select * from dim_outcome
-
