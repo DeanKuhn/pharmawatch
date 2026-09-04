@@ -7,7 +7,7 @@ __pycache__/
 .claude/
 
 dbt/pharmawatch_dev.duckdb
-dbt/targets/
+dbt/target/
 dbt/.user.yml
 dbt/profiles.yml
 
