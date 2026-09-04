@@ -1,4 +1,3 @@
--- count the number of pids per drug + reaction pair
 with pair_counts as (
 
 	select

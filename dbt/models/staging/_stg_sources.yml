@@ -2,22 +2,77 @@ version: 2
 
 sources:
   - name: faers
-    description: Deduped FAERS adverse event data (Parquet on r2)
+    description: "FDA Adverse Event Reporting System (FAERS) — deduped Parquet files from the PharmaWatch pipeline."
     meta:
       # for now, using local location (deduped folder)
       external_location: "../data/deduped/{name}.parquet"
     tables:
       - name: demo
-        description: Case demographics
+        description: "Case demographics — one row per deduplicated adverse event case"
+        columns:
+          - name: primaryid
+            description: "Unique case identifier (post-2012)"
+          - name: caseid
+            description: "Legacy case identifier (pre-2012)"
+          - name: caseversion
+            description: "Report version number"
+          - name: event_dt
+            description: "Adverse event date (raw string, parsed in staging)"
+          - name: age
+            description: "Patient age (raw, unit in age_cod)"
+          - name: age_cod
+            description: "Age unit code (YR, DEC, MON, WK, DY, HR)"
+          - name: sex
+            description: "Patient sex (M, F, or null)"
+          - name: reporter_country
+            description: "Reporter's country code"
       - name: drug
-        description: Drugs involved
+        description: "Drugs involved in each case"
+        columns:
+          - name: primaryid
+            description: "Case identifier"
+          - name: drug_seq
+            description: "Drug sequence number within the case"
+          - name: role_cod
+            description: "Drug role (PS, SS, C, I)"
+          - name: drugname
+            description: "Drug name as reported"
+          - name: route
+            description: "Route of administration"
       - name: reac
-        description: Reactions per case
+        description: "Adverse reactions per case"
+        columns:
+          - name: primaryid
+            description: "Case identifier"
+          - name: pt
+            description: "MedDRA Preferred Term (renamed to reaction_pt in staging)"
       - name: outc
-        description: Outcomes for the case
+        description: "Case outcomes (death, hospitalization, etc.)"
+        columns:
+          - name: primaryid
+            description: "Case identifier"
+          - name: outc_cod
+            description: "Outcome code (DE, HO, LT, DS, CA, RI, OT)"
       - name: ther
-        description: Therapy dates per drug-case pair
+        description: "Therapy dates per drug-case pair"
+        columns:
+          - name: primaryid
+            description: "Case identifier"
+          - name: start_dt
+            description: "Therapy start date"
+          - name: end_dt
+            description: "Therapy end date"
       - name: indi
-        description: Indications per drug-case pair
+        description: "Drug indications — what each drug was prescribed for"
+        columns:
+          - name: primaryid
+            description: "Case identifier"
+          - name: indi_pt
+            description: "MedDRA Preferred Term for the indication"
       - name: rpsr
-        description: Reporting sources
+        description: "Report sources — who submitted the report"
+        columns:
+          - name: primaryid
+            description: "Case identifier"
+          - name: rpsr_cod
+            description: "Report source code"

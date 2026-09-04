@@ -1,5 +1,3 @@
--- from demo, normalize age to years, bucket, normalize sex too
-
 with age_normalized as (
 
 	select

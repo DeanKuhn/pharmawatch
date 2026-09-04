@@ -2,54 +2,76 @@ version: 2
 
 models:
   - name: dim_drug
+    description: "Drug dimension. One row per unique drug name sourced from primary suspect drugs."
     columns:
       - name: drug_key
+        description: "Surrogate key (hash of drugname)"
         tests:
           - unique
           - not_null
       - name: drugname
+        description: "Drug name as reported in FAERS"
         tests:
           - not_null
           - unique
 
   - name: dim_reaction
+    description: "Reaction dimension. One row per unique MedDRA Preferred Term."
     columns:
       - name: reaction_key
+        description: "Surrogate key (hash of reaction_pt)"
         tests:
           - unique
           - not_null
       - name: reaction_pt
+        description: "MedDRA Preferred Term for the adverse reaction"
         tests:
           - not_null
           - unique
 
   - name: dim_outcome
+    description: "Outcome dimension. One row per FDA outcome code with decoded label."
     columns:
       - name: outcome_key
+        description: "Surrogate key (hash of outcome_code)"
         tests:
           - unique
           - not_null
       - name: outcome_code
+        description: "FDA outcome code: DE, HO, LT, DS, CA, RI, OT"
         tests:
           - not_null
           - unique
           - accepted_values:
               arguments:
                 values: ['DE', 'HO', 'LT', 'DS', 'CA', 'RI', 'OT']
+      - name: outcome_desc
+        description: "Human-readable outcome label (Death, Hospitalization, etc.)"
 
   - name: dim_demographics
+    description: "Demographics dimension. One row per unique (age_group, sex, reporter_country) combination."
     columns:
       - name: demographics_key
+        description: "Surrogate key (hash of age_group + sex + reporter_country)"
         tests:
           - unique
           - not_null
+      - name: age_group
+        description: "Age bucket: 0-17, 18-44, 45-64, 65+, or Unknown"
+      - name: sex
+        description: "Normalized sex: Male, Female, or Unknown"
+      - name: reporter_country
+        description: "Two-letter country code of the reporter"
 
   - name: fct_adverse_events
+    description: "Fact table. Grain: one row per (case, drug, reaction) triple for primary suspect drugs. Surrogate FKs to all dimensions, outcome boolean flags pre-aggregated to avoid grain multiplication, plus degenerate dimensions (drugname, reaction_pt, route)."
     columns:
       - name: primaryid
+        description: "Case identifier"
         tests:
           - not_null
       - name: drug_key
+        description: "FK to dim_drug"
         tests:
           - not_null
           - relationships:
@@ -57,6 +79,7 @@ models:
                 to: ref('dim_drug')
                 field: drug_key
       - name: reaction_key
+        description: "FK to dim_reaction"
         tests:
           - not_null
           - relationships:
@@ -64,39 +87,80 @@ models:
                 to: ref('dim_reaction')
                 field: reaction_key
       - name: demographics_key
+        description: "FK to dim_demographics"
         tests:
           - not_null
           - relationships:
               arguments:
                 to: ref('dim_demographics')
                 field: demographics_key
+      - name: drugname
+        description: "Degenerate dimension: drug name as reported"
+      - name: reaction_pt
+        description: "Degenerate dimension: MedDRA Preferred Term"
+      - name: route
+        description: "Degenerate dimension: route of administration"
+      - name: event_dt
+        description: "Date the adverse event occurred"
+      - name: has_death
+        description: "1 if case outcome includes death, else 0"
+      - name: has_hospitalization
+        description: "1 if case outcome includes hospitalization, else 0"
+      - name: has_life_threatening
+        description: "1 if case outcome includes life-threatening, else 0"
+      - name: has_disability
+        description: "1 if case outcome includes disability, else 0"
+      - name: has_congenital_anomaly
+        description: "1 if case outcome includes congenital anomaly, else 0"
+      - name: has_required_intervention
+        description: "1 if case outcome includes required intervention, else 0"
+      - name: has_other_outcome
+        description: "1 if case outcome includes other/unspecified outcome, else 0"
 
   - name: mart_prr
+    description: "Proportional Reporting Ratio (PRR) signal detection. One row per drug-reaction pair with a >= 3 cases. Uses 2x2 contingency table with log-transformed 95% confidence intervals."
     columns:
       - name: drugname
+        description: "Drug name"
         tests:
           - not_null
       - name: reaction_pt
+        description: "MedDRA Preferred Term"
         tests:
           - not_null
       - name: case_count
+        description: "Number of cases reporting this drug-reaction pair (cell 'a' of the contingency table)"
         tests:
           - not_null
       - name: prr
+        description: "Proportional Reporting Ratio: (a/(a+b)) / (c/(c+d)). Values > 1 suggest disproportionate reporting."
         tests:
           - not_null
+      - name: prr_lower
+        description: "Lower bound of 95% CI (log-transformed)"
+      - name: prr_upper
+        description: "Upper bound of 95% CI (log-transformed)"
 
   - name: mart_ror
+    description: "Reporting Odds Ratio (ROR) signal detection. One row per drug-reaction pair with a >= 3 cases. Uses 2x2 contingency table with log-transformed 95% confidence intervals."
     columns:
       - name: drugname
+        description: "Drug name"
         tests:
           - not_null
       - name: reaction_pt
+        description: "MedDRA Preferred Term"
         tests:
           - not_null
       - name: case_count
+        description: "Number of cases reporting this drug-reaction pair (cell 'a' of the contingency table)"
         tests:
           - not_null
       - name: ror
+        description: "Reporting Odds Ratio: (a*d)/(b*c). Values > 1 suggest disproportionate reporting."
         tests:
           - not_null
+      - name: ror_lower
+        description: "Lower bound of 95% CI (log-transformed)"
+      - name: ror_upper
+        description: "Upper bound of 95% CI (log-transformed)"

@@ -2,26 +2,44 @@ version: 2
 
 models:
   - name: int_drug_reaction_pairs
-    description: "One row per (case, drug, reaction) for primary suspect drugs"
+    description: "Each unique (case, drug, reaction) triple for primary suspect drugs only. Grain: one row per primaryid + drugname + reaction_pt. Multiple doses of the same drug within a case are collapsed."
     columns:
       - name: primaryid
+        description: "Case identifier"
         tests:
           - not_null
+      - name: drugname
+        description: "Drug name as reported"
+      - name: route
+        description: "Route of administration (max selected when multiple doses exist)"
+      - name: reaction_pt
+        description: "MedDRA Preferred Term for the adverse reaction"
 
   - name: int_case_demographics
-    description: "Demographics with normalized age and sex"
+    description: "Case demographics with normalized age (converted to years) and bucketed age groups. One row per case."
     columns:
       - name: primaryid
+        description: "Case identifier"
         tests:
           - not_null
           - unique
+      - name: age_years
+        description: "Patient age normalized to years from the original unit (YR, DEC, MON, WK, DY, HR)"
       - name: age_group
+        description: "Age bucket: 0-17, 18-44, 45-64, 65+, or Unknown"
         tests:
           - accepted_values:
               arguments:
                 values: ['0-17', '18-44', '45-64', '65+', 'Unknown']
       - name: sex
+        description: "Normalized sex: Male, Female, or Unknown"
         tests:
           - accepted_values:
               arguments:
                 values: ['Male', 'Female', 'Unknown']
+      - name: reporter_country
+        description: "Two-letter country code of the reporter"
+      - name: event_dt
+        description: "Date the adverse event occurred"
+      - name: occp_cod
+        description: "Reporter occupation code (MD, PH, CN, etc.)"
