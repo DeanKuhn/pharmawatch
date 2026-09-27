@@ -19,6 +19,10 @@ models:
         description: "Date the adverse event occurred"
       - name: fda_dt
         description: "Date the FDA received the report"
+        data_tests:
+          - not_null
+              config:
+                severity: warn
       - name: init_fda_dt
         description: "Date the FDA received the initial report"
       - name: death_dt
