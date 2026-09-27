@@ -9,7 +9,7 @@ reac as (
 	select
 		primaryid,
 		caseid,
-		pt as reaction_pt
+		upper(trim(pt)) as reaction_pt
 	
 	from deduped
 
