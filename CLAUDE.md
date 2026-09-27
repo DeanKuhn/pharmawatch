@@ -8,7 +8,7 @@ See `docs/decisions/` for architectural rationale.
 
 1. Never mutate raw data. Downloads land once and are read-only.
    (Enforced by a PreToolUse hook; do not attempt to work around it.)
-2. Every data quality horror discovered goes in the README "mess log" with an example.
+2. Every data quality horror discovered goes in `docs/mess_log.md` with an example.
 
 ## Working style
 
