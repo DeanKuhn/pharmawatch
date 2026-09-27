@@ -11,7 +11,7 @@ drug as (
 		caseid,
 		try_cast(drug_seq as integer) as drug_seq,
 		role_cod,
-		drugname,
+		upper(trim(drugname)) as drugname,
 		route,
 		try_cast(dose_amt as decimal) as dose_amt,
 		dose_unit,
