@@ -76,7 +76,7 @@ joined as (
   from target t
   left join lookup l on t.drugname = l.drugname
 
-)
+),
 
 final as (
 
