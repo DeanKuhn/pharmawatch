@@ -43,3 +43,22 @@ models:
         description: "Date the adverse event occurred"
       - name: occp_cod
         description: "Reporter occupation code (MD, PH, CN, etc.)"
+  - name: int_contingency
+    description: "2x2 contingency table per drug-reaction pair, shared by mart_prr and mart_ror. Counts are distinct cases (primaryid) from int_drug_reaction_pairs. Grain: one row per drugname + reaction_pt. Unfiltered — marts apply their own thresholds."
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns: ['drugname', 'reaction_pt']
+    columns:
+      - name: drugname
+        description: "Drug name as reported"
+      - name: reaction_pt
+        description: "MedDRA Preferred Term"
+      - name: a
+        description: "Cases reporting this drug and this reaction"
+      - name: b
+        description: "Cases reporting this drug but not this reaction"
+      - name: c
+        description: "Cases reporting this reaction but not this drug"
+      - name: d
+        description: "Cases reporting neither this drug nor this reaction"
