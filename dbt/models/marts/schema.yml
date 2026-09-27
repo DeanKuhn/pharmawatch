@@ -128,10 +128,16 @@ models:
         description: "MedDRA Preferred Term"
         tests:
           - not_null
-      - name: case_count
-        description: "Number of cases reporting this drug-reaction pair (cell 'a' of the contingency table)"
+      - name: a
+        description: "Cases reporting this drug and this reaction (always >= 3)"
         tests:
           - not_null
+      - name: b
+        description: "Cases reporting this drug but not this reaction (always > 0)"
+      - name: c
+        description: "Cases reporting this reaction but not this drug (always > 0). Small values drive extreme ratios."
+      - name: d
+        description: "Cases reporting neither this drug nor this reaction (always > 0)"
       - name: prr
         description: "Proportional Reporting Ratio: (a/(a+b)) / (c/(c+d)). Values > 1 suggest disproportionate reporting."
         tests:
@@ -140,6 +146,14 @@ models:
         description: "Lower bound of 95% CI (log-transformed)"
       - name: prr_upper
         description: "Upper bound of 95% CI (log-transformed)"
+      - name: chi_square
+        description: "Yates-corrected chi-square: N(|ad - bc| - N/2)^2 / ((a+b)(c+d)(a+c)(b+d)), N = a+b+c+d. Correction floored at 0."
+        tests:
+          - not_null
+      - name: is_evans_signal
+        description: "Evans et al. (2001) screening criteria: prr >= 2 AND chi_square >= 4 AND a >= 3. A screening flag, not a ranking — sparse-cell pairs pass easily."
+        tests:
+          - not_null
 
   - name: mart_ror
     description: "Reporting Odds Ratio (ROR) signal detection. One row per drug-reaction pair with a >= 3 cases. Uses 2x2 contingency table with log-transformed 95% confidence intervals."
@@ -152,10 +166,16 @@ models:
         description: "MedDRA Preferred Term"
         tests:
           - not_null
-      - name: case_count
-        description: "Number of cases reporting this drug-reaction pair (cell 'a' of the contingency table)"
+      - name: a
+        description: "Cases reporting this drug and this reaction (always >= 3)"
         tests:
           - not_null
+      - name: b
+        description: "Cases reporting this drug but not this reaction (always > 0)"
+      - name: c
+        description: "Cases reporting this reaction but not this drug (always > 0). Small values drive extreme ratios."
+      - name: d
+        description: "Cases reporting neither this drug nor this reaction (always > 0)"
       - name: ror
         description: "Reporting Odds Ratio: (a*d)/(b*c). Values > 1 suggest disproportionate reporting."
         tests:
