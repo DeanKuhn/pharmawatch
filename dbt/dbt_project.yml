@@ -8,7 +8,7 @@ clean-targets: ["target", "dbt_packages"]
 models:
   pharmawatch:
     staging:
-      +materialized: view
+      +materialized: table
     intermediate:
       +materialized: ephemeral
     marts:
