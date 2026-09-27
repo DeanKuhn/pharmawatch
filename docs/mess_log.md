@@ -181,6 +181,22 @@ Data quality issues discovered in FAERS/openFDA. Updated as we find them.
 - If you split on `\` and count the parts, zolpidem looks like a 2-drug combo.
 - Fix: pending. Map each part to its RxNorm ingredient, then keep the distinct set.
 
+### Some parentheticals in `drugname` carry meaning
+
+- Removing parentheses from names helps overall: it fills 85k more rows via the lookup, and the mid-stratum pure share goes from 45.0% to 53.7%. Most of what gets removed is junk: `CITALOPRAM (UNKNOWN)`, `TRAMADOL (SIMILAR TO NDA 21-745)`, `NAPROXEN SODIUM ({= 220 MG)`.
+- But some parentheses mark a different drug:
+  - isotope: `SODIUM IODIDE (I 131)` becomes `SODIUM IODIDE`, which merges radioactive iodine therapy with plain sodium iodide.
+  - species: `ANTI-THYMOCYTE GLOBULIN (RABBIT)` becomes `ANTI-THYMOCYTE GLOBULIN`, which merges the rabbit and horse products (Thymoglobulin vs Atgam). Lookup purity is 0.56. Insulin (PORCINE/BOVINE) is the same trap. Not checked in the data yet.
+- Fix: pending. The cleaning rule should keep isotope and species qualifiers.
+- Query: `dbt/analyses/prod_ai_lookup_cleansed.sql`.
+
+### Brand names inside `prod_ai`
+
+- `prod_ai` should hold only ingredients. Sometimes it holds a brand name with the ingredients in parentheses: `LISTERINE (EUCALYPTOL\MENTHOL\METHYL SALICYLA…`.
+- These values won't match RxNorm ingredient names directly.
+- The same brand family can have different ingredient sets. `LISTERINE` maps to 4 different `prod_ai` values (purity 0.57).
+- Fix: pending. Scale unknown. The RxNorm check will list them among the pieces that don't match.
+
 ### Mangled non-ASCII characters in `drugname`
 
 - `DEXTROSA AL 5% + CLORURO DE SODIO AL 0.9% BAXTER SOLUCI?N INYECTABLE` — `ó` replaced by `?`.
