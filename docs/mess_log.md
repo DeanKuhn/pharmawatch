@@ -105,6 +105,35 @@ Data quality issues discovered in FAERS/openFDA. Updated as we find them.
 
 - `Range` header + `Accept-Encoding: gzip` (or any non-identity encoding) causes the server to send headers then hang indefinitely. `Accept-Encoding: identity` works. Plain GET with encoding also works. Fix: send `Accept-Encoding: identity` on every ranged read.
 
+### `reaction_pt` casing is inconsistent
+
+- The same MedDRA PT appears in different cases: `GRAFT DELAMINATION` (Carticel reports) vs `Graft delamination` (MACI reports).
+- Grouping on raw `reaction_pt` splits one reaction into several, shrinking `reaction_total` and cell `c` in PRR/ROR. MedDRA PTs are case-insensitive.
+- Fix: `upper(trim(reaction_pt))` in `stg_reac`.
+
+### `drugname` is free text, heavily fragmented
+
+- Suffix junk: `NEVIRAPINE (NEVIRAPINE) (NR)`, `METHADONE (NGX)`.
+- Non-English spelling + manufacturer + strength in one string: `TOPIRAMAT RANBAXY 25MG TABLET`.
+- Appears truncated mid-name: `CORICIDIN HBP COUGH + COLD (CHLORPHENIRAMINE MALEATE/DEXTROMETHORPHAN ` (trailing space, no closing paren).
+- Each variant counts as its own drug, so real drugs are split into many small ones. Small `drug_total` + small `reaction_total` → PRRs in the millions (e.g. Coricidin/CIRCUMSTANTIALITY: a=21, b=29, c=2, PRR ≈ 4.3M).
+- Scale (2026-09-25, dev `stg_drug`, `role_cod = 'PS'`, after `upper(trim())`, ~20.88M rows):
+  - 139,460 distinct names; 84,208 (60%) appear exactly once (0.4% of rows).
+  - Row coverage: top 1k names → 79.6%, top 10k → 98.1%, top 50k → 99.5%.
+  - Singletons can't pass Evans (a ≥ 3); false signals come from the mid tail (n ≈ 3–39, below top 10k).
+  - Query: `dbt/analyses/drugname_coverage.sql`.
+- Fix: pending — RxNorm normalization.
+
+### Mangled non-ASCII characters in `drugname`
+
+- `DEXTROSA AL 5% + CLORURO DE SODIO AL 0.9% BAXTER SOLUCI?N INYECTABLE` — `ó` replaced by `?`.
+- Not yet determined whether the `?` is in FDA's source file or introduced during parse. Check raw bytes before assuming.
+
+### Suspected report clusters (unverified)
+
+- Coricidin → CIRCUMSTANTIALITY / TANGENTIALITY and METHADONE (NGX) → CONGENITAL VISUAL ACUITY REDUCED look like one source (e.g. a literature article) filed as many reports.
+- Check whether the cases share `event_dt`, `occr_country`, `lit_ref` before calling them duplicates. `lit_ref` is dropped in `stg_demo`, so query the source Parquet.
+
 ### Watch: FDA rebranding FAERS to AEMS
 
 - FDA consolidating FAERS into "Adverse Event Monitoring System" (AEMS). Download page URL may go stale. Quarterly extract files themselves unaffected as of 2026-07. Re-check URL in `download.py` if fetches fail.
