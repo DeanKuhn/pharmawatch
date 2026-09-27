@@ -55,9 +55,34 @@ Data quality issues discovered in FAERS/openFDA. Updated as we find them.
 
 ### Partial-precision dates
 
-- `event_dt` is 4-digit (year only) for ~8% of rows, 6-digit (year-month) for ~10%, full 8-digit for ~65%. `rept_dt` rarely partial. `exp_dt`/`start_dt`/`end_dt`/`death_dt` can also be partial.
+- `event_dt` (20.59M DEMO rows, 2026-09-26): full 8-digit 40.6%, 6-digit (year-month) 5.5%, 4-digit (year only) 4.3%, null 49.7%. `rept_dt` rarely partial. `exp_dt`/`start_dt`/`end_dt` can also be partial.
 - `fda_dt`, `init_fda_dt`, `mfr_dt` are consistently full 8-digit — safe to cast to `date`.
-- Partial dates kept as `text` in staging. Precision recoverable from string length (4/6/8).
+- `parse_faers_date` pads partial dates to the 1st of the month / Jan 1. ~19% of known event dates therefore pile up on fake day-1 / Jan-1 spikes, and precision is lost after staging.
+- **Bug found 2026-09-25:** the macro used `try_cast(x as date)`. DuckDB only casts ISO `YYYY-MM-DD`, so `'20150317'` → NULL silently; every date in staging was NULL. Fix: `try_strptime(x, '%Y%m%d')::date`.
+
+### `death_dt` is empty
+
+- 0 non-blank values across all 20.59M DEMO rows in the source Parquet.
+- Death must come from OUTC `outc_cod = 'DE'`.
+
+### Placeholder event dates
+
+- `19000101` (14 rows), `00010101` (9); parsed `event_dt` ranges from `0001-01-01` to `9199-02-01`.
+- ~450 full dates fall outside 1950–2026. Filter or flag before any timeline analysis.
+
+### Junk in numeric fields
+
+- `age`: 12 of 12.1M fail cast — `U`, `163/6`, `N/A`.
+- `dose_amt`: 4,362 fail — `18-54`, `150/0.5`, `DF`, `554 MILLION`.
+- `dur`: 290 of 3.2M fail — `5-9`, `1X`.
+- `caseversion`: see FOLL_SEQ below. All `*_seq` columns: 0 failures.
+- All negligible; `try_cast` → NULL. Separately, `dose_amt` was cast to bare `decimal` = DECIMAL(18,3) in DuckDB, silently rounding small doses (`0.0005` → `0.001`). Now `double`.
+
+### Stimulated reporting inflates brand counts
+
+- `ZANTAC`: #5 PS drugname (266k rows); 88% filed 2021–2022 vs 1.7k in 2019. Matches the 2020 ranitidine recall and litigation.
+- `PROACTIV MD ADAPALENE ACNE TREATMENT`: #6 (175k rows) for an OTC acne product, concentrated 2018–2021. Cause unverified.
+- Signals for these reflect reporting pressure, not just pharmacology. Flag rather than rank.
 
 ### FOLL_SEQ (pre-2012q4 caseversion)
 
@@ -116,7 +141,7 @@ Data quality issues discovered in FAERS/openFDA. Updated as we find them.
 - Suffix junk: `NEVIRAPINE (NEVIRAPINE) (NR)`, `METHADONE (NGX)`.
 - Non-English spelling + manufacturer + strength in one string: `TOPIRAMAT RANBAXY 25MG TABLET`.
 - Appears truncated mid-name: `CORICIDIN HBP COUGH + COLD (CHLORPHENIRAMINE MALEATE/DEXTROMETHORPHAN ` (trailing space, no closing paren).
-- Each variant counts as its own drug, so real drugs are split into many small ones. Small `drug_total` + small `reaction_total` → PRRs in the millions (e.g. Coricidin/CIRCUMSTANTIALITY: a=21, b=29, c=2, PRR ≈ 4.3M).
+- Each variant counts as its own drug, so real drugs are split into many small ones. Small `drug_total` + small `reaction_total` → PRRs in the millions (e.g. Coricidin/CIRCUMSTANTIALITY: a=21, b=29, c=9, PRR ≈ 960k, χ² ≈ 5.77M after `upper(trim(reaction_pt))`).
 - Scale (2026-09-25, dev `stg_drug`, `role_cod = 'PS'`, after `upper(trim())`, ~20.88M rows):
   - 139,460 distinct names; 84,208 (60%) appear exactly once (0.4% of rows).
   - Row coverage: top 1k names → 79.6%, top 10k → 98.1%, top 50k → 99.5%.
