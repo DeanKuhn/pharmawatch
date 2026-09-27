@@ -149,6 +149,38 @@ Data quality issues discovered in FAERS/openFDA. Updated as we find them.
   - Query: `dbt/analyses/drugname_coverage.sql`.
 - Fix: pending — RxNorm normalization.
 
+### Trailing periods split `drugname`
+
+- `PREDNISONE.` and `PREDNISONE` are distinct names. Same for `RANITIDINE.`, `ASPIRIN.`.
+- Rows with filled `prod_ai` (all roles, 2026-09-27): `PREDNISONE` 295,558 vs `PREDNISONE.` 254,282; `RANITIDINE.` 381,444; `ASPIRIN.` 192,460. So the period variant can be almost as common as the clean name.
+- Splits drug counts like any other variant. Also causes misses in the drugname → `prod_ai` lookup if the old name uses one form and the new name uses the other.
+- Fix: pending — strip trailing punctuation in the cleaning step (keep the original name).
+
+### Decorated names miss the drugname → `prod_ai` lookup
+
+- The lookup maps each drugname to the `prod_ai` it usually has in later reports. It fills 88.0% of the 4.42M PS rows that have no `prod_ai`.
+- 409k rows (9.3%) have no match. In the head stratum that is 47 names / 180,706 rows. Most are known drugs with extra text attached:
+  - dose form in parentheses: `ALEVE (CAPLET)` (16,485 rows), `SABRIL (FOR ORAL SOLUTION)` (1,226)
+  - another name in parentheses: `IBUPROFEN (ADVIL)` (1,203), `VICTOZA (LIRAGLUTIDE) SOLUTION FOR INJECTION,…` (1,186)
+  - form word or strength as a suffix: `AMNESTEEM CAPSULES` (1,135), `STALEVO 100` (1,190), `SYMBICORT PMDI` (1,148)
+  - marketing prefix: `EXTRA STRENGTH TYLENOL` (1,169)
+- Withdrawn before 2014, so the name never shows up later with a `prod_ai`: propoxyphene products (`PROPOXYPHENE NAPSYLATE/ACETAMINOPHEN TABLETS`, 1,243).
+- Multi-ingredient solution: `DIANEAL LOW CALCIUM` (24,833).
+- `PULMICORT` (1,061) doesn't match either. Guess, not checked: later reports use a variant like `PULMICORT RESPULES`.
+- Query: `dbt/analyses/prod_ai_lookup_coverage.sql`.
+
+### Pseudo-combos in `prod_ai`
+
+- A backslash usually joins two ingredients. Sometimes it joins two forms of the *same* ingredient:
+  - `ZOLPIDEM\ZOLPIDEM TARTRATE` (18,570 rows)
+  - `MYCOPHENOLATE MOFETIL\MYCOPHENOLATE MOFETIL HYDROCHLORIDE` (17,901)
+  - `TACROLIMUS\TACROLIMUS ANHYDROUS` (14,551)
+  - also `BOSENTAN\BOSENTAN MONOHYDRATE`, `GEMCITABINE\GEMCITABINE HYDROCHLORIDE`, `DICLOFENAC\DICLOFENAC SODIUM`, `DARIFENACIN\DARIFENACIN HYDROBROMIDE`
+- Salt forms also vary with no backslash: `ZOLPIDEM TARTRATE` vs `ZOLPIDEM`, `VARDENAFIL HYDROCHLORIDE` vs `VARDENAFIL HYDROCHLORIDE TRIHYDRATE`.
+- As a result, one drugname carries 2 different `prod_ai` strings and looks ambiguous in the lookup (all 8 head "ambiguous" names, 40,669 rows), even though it is one drug.
+- If you split on `\` and count the parts, zolpidem looks like a 2-drug combo.
+- Fix: pending. Map each part to its RxNorm ingredient, then keep the distinct set.
+
 ### Mangled non-ASCII characters in `drugname`
 
 - `DEXTROSA AL 5% + CLORURO DE SODIO AL 0.9% BAXTER SOLUCI?N INYECTABLE` — `ó` replaced by `?`.
