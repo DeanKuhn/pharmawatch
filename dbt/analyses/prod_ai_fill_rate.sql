@@ -17,8 +17,8 @@ final as (
   select
     yr,
     count(*) as total_rows,
-    count_if(prod_ai is not null and trim(prod_ai) != '') as filled,
-    count_if(prod_ai is not null and prod_ai != '') / count(*) as fill_pct
+    count(prod_ai) as fill_count,
+    round(100.0 * count(prod_ai) / count(*), 1) as fill_pct
 
   from filed
 
