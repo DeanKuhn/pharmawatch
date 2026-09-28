@@ -147,7 +147,13 @@ Data quality issues discovered in FAERS/openFDA. Updated as we find them.
   - Row coverage: top 1k names → 79.6%, top 10k → 98.1%, top 50k → 99.5%.
   - Singletons can't pass Evans (a ≥ 3); false signals come from the mid tail (n ≈ 3–39, below top 10k).
   - Query: `dbt/analyses/drugname_coverage.sql`.
-- Fix: pending — RxNorm normalization.
+- Partial fix (2026-09-27): name cleaning (parentheticals → trailing punctuation/whitespace → form word → strength with unit) plus drugname → modal `prod_ai` lookup for the 4,417,410 PS rows with null `prod_ai`.
+  - Distinct names: all PS 139,460 → 107,233 (−23%); PS with null `prod_ai` 70,771 → 53,367 (−25%).
+  - Lookup pure share (≥95% one `prod_ai`), head / upper-mid / mid / tail / overall: baseline 92.8 / 78.2 / 45.0 / 9.3 / 88.0 → 94.5 / 82.4 / 57.8 / 26.3 / 90.6.
+  - Residual 414,964 rows (9.4% of target, ~2.0% of all PS rows): no_match 279,679, mostly + ambiguous 114,079 (mostly salt noise), low_support 21,206.
+  - "Pure" is still a `prod_ai` string, not an identity.
+  - Query: `dbt/analyses/prod_ai_lookup_cleansed.sql`.
+- Fix: pending — RxNorm normalization (prod_ai → IN set; RxNav for the residual).
 
 ### Trailing periods split `drugname`
 
@@ -185,7 +191,7 @@ Data quality issues discovered in FAERS/openFDA. Updated as we find them.
 
 - Removing parentheses from names helps overall: it fills 85k more rows via the lookup, and the mid-stratum pure share goes from 45.0% to 53.7%. Most of what gets removed is junk: `CITALOPRAM (UNKNOWN)`, `TRAMADOL (SIMILAR TO NDA 21-745)`, `NAPROXEN SODIUM ({= 220 MG)`.
 - But some parentheses mark a different drug:
-  - isotope: `SODIUM IODIDE (I 131)` becomes `SODIUM IODIDE`, which merges radioactive iodine therapy with plain sodium iodide.
+  - isotope: `SODIUM IODIDE (I 131)` becomes `SODIUM IODIDE`, which merges radioactive iodine therapy with plain sodium iodide. The isotope also appears without parentheses: `SODIUM IODIDE I 131` (170 PS rows with null `prod_ai`) becomes `SODIUM IODIDE I` if trailing bare numbers are stripped.
   - species: `ANTI-THYMOCYTE GLOBULIN (RABBIT)` becomes `ANTI-THYMOCYTE GLOBULIN`, which merges the rabbit and horse products (Thymoglobulin vs Atgam). Lookup purity is 0.56. Insulin (PORCINE/BOVINE) is the same trap. Not checked in the data yet.
 - Fix: pending. The cleaning rule should keep isotope and species qualifiers.
 - Query: `dbt/analyses/prod_ai_lookup_cleansed.sql`.
@@ -196,6 +202,25 @@ Data quality issues discovered in FAERS/openFDA. Updated as we find them.
 - These values won't match RxNorm ingredient names directly.
 - The same brand family can have different ingredient sets. `LISTERINE` maps to 4 different `prod_ai` values (purity 0.57).
 - Fix: pending. Scale unknown. The RxNorm check will list them among the pieces that don't match.
+
+### Trailing numbers without a unit can be the drug's identity
+
+- Stripping a trailing strength helps the lookup (mid-stratum pure share 55.8% → 58.3%), but only numbers with a unit are safe to drop (`CITALOPRAM 20MG`, `DEXTROSE 5%`).
+- Without a unit, the number is often part of the name. Counts are PS rows with null `prod_ai` (2026-09-27):
+  - study codes: `BIBF 1120` (nintedanib, 813), `BIBW 2992` (afatinib, 199), `AMG 145` (evolocumab, 213), `BI 1356` (linagliptin), `BI 1744` (olodaterol). Stripped, they become `BIBF`, `AMG`, `BI`, which are sponsor prefixes that pool many different compounds.
+  - insulin premix ratios: `HUMULIN 70/30` (4,585), `NOVOLIN 70/30`, `NOVOLOG MIX 70/30`, `RYZODEG 70/30`. Bare `HUMULIN` also covers R and N, which have different ingredients.
+  - polymer grade: `POLYETHYLENE GLYCOL 3350` (2,439, plus 2,541 as `3350.`).
+  - isotope: `SODIUM IODIDE I 131` (see parentheticals entry).
+- Many unitless numbers are harmless (`ISOVUE 370`, `MONISTAT 7`, `SOLIQUA 100/33`), but they can't be told apart by pattern.
+- Requiring a unit costs 0.6 points of overall pure share (0.7 in mid).
+- Fix: rule 3 in `dbt/analyses/prod_ai_lookup_cleansed.sql` requires a unit (`MG|MCG|G|ML|%`).
+
+### Same brand, different ingredient over time
+
+- `ZANTAC 75` / `ZANTAC 150` are ranitidine. `ZANTAC 360` is famotidine: the brand was reused after ranitidine was withdrawn in 2020.
+- A name → ingredient mapping that ignores time blends the two. Stripping the number sends famotidine reports to ranitidine, which is the drug under the NDMA recall and litigation (see stimulated reporting entry).
+- Not yet checked in the data: `prod_ai` on `ZANTAC 360` rows should be `FAMOTIDINE`. Other reused brands are likely (unknown scale).
+- Fix: pending. Keep the full brand string in the lookup key. Consider whether the modal `prod_ai` needs a time window for brands like this.
 
 ### Mangled non-ASCII characters in `drugname`
 
