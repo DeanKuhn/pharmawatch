@@ -81,6 +81,7 @@ Data quality issues discovered in FAERS/openFDA. Updated as we find them.
 ### Stimulated reporting inflates brand counts
 
 - `ZANTAC`: #5 PS drugname (266k rows); 88% filed 2021–2022 vs 1.7k in 2019. Matches the 2020 ranitidine recall and litigation.
+  - In `prod_ai` pieces (all roles, 2026-09-28), ranitidine is the #1 ingredient: `RANITIDINE HYDROCHLORIDE` 1,176,437 + `RANITIDINE` 651,188 drug rows. Unchecked: share of reports with reporter occupation `occp_cod = 'LW'` (lawyer) in demo.
 - `PROACTIV MD ADAPALENE ACNE TREATMENT`: #6 (175k rows) for an OTC acne product, concentrated 2018–2021. Cause unverified.
 - Signals for these reflect reporting pressure, not just pharmacology. Flag rather than rank.
 
@@ -185,6 +186,7 @@ Data quality issues discovered in FAERS/openFDA. Updated as we find them.
 - Salt forms also vary with no backslash: `ZOLPIDEM TARTRATE` vs `ZOLPIDEM`, `VARDENAFIL HYDROCHLORIDE` vs `VARDENAFIL HYDROCHLORIDE TRIHYDRATE`.
 - As a result, one drugname carries 2 different `prod_ai` strings and looks ambiguous in the lookup (all 8 head "ambiguous" names, 40,669 rows), even though it is one drug.
 - If you split on `\` and count the parts, zolpidem looks like a 2-drug combo.
+- Some repeats are exact: `DEXTROSE MONOHYDRATE\DEXTROSE MONOHYDRATE\DOBUTAMINE HYDROCHLORIDE\DOBUTAMINE HYDROCHLORIDE` (672 rows), `POLYETHYLENE GLYCOL 3350` twice in one bowel-prep string. Count piece totals with `count(distinct piece)`, not `count(piece)`. Total scale not measured apart from the ` OR ` strings below.
 - Fix: pending. Map each part to its RxNorm ingredient, then keep the distinct set.
 
 ### Some parentheticals in `drugname` carry meaning
@@ -202,6 +204,36 @@ Data quality issues discovered in FAERS/openFDA. Updated as we find them.
 - These values won't match RxNorm ingredient names directly.
 - The same brand family can have different ingredient sets. `LISTERINE` maps to 4 different `prod_ai` values (purity 0.57).
 - Fix: pending. Scale unknown. The RxNorm check will list them among the pieces that don't match.
+
+### ` OR ` in `prod_ai`: several candidate products, not one
+
+- `prod_ai` is filled by FDA from the reported product, not typed by the reporter. When the reported name fits several products, FDA lists all of them joined by ` OR ` (once as ` AND OR `).
+- 81 distinct strings, 9,638 drug rows (2026-09-28). Examples:
+  - same-class alternatives: `PEGINTERFERON ALFA-2A OR PEGINTERFERON ALFA-2B` (834), `INTERFERON ALFA-2A OR INTERFERON ALFA-2B` (747)
+  - unrelated drugs: `AZITHROMYCIN OR METHOTREXATE SODIUM` (232), `COPPER OR LEVONORGESTREL` (265, copper vs hormonal IUD)
+  - `AND OR`: `ACETAMINOPHEN AND OR DEXTROMETHORPHAN AND OR DIPHENHYDRAMINE AND OR …` (187)
+  - whole product lines: `AVOBENZONE\HOMOSALATE\OCTISALATE\OCTOCRYLENE OR AVOBENZONE\HOMOSALATE\OCTISALATE\OCTOCRYLENE\OXYBENZONE` (120), multi-season influenza vaccine strings
+- Splitting on `\` alone produces merged junk pieces at each `OR`: `OCTOCRYLENE OR AVOBENZONE`.
+- Such a string has no single RxNorm ingredient set. Tiny in rows (~0.02%), but the interferon rows are real drugs in the mid stratum.
+- Fix: pending. Planning decision: union of all ingredients, keep as ambiguous, or mark unresolved.
+- Query: `dbt/analyses/prod_ai_pieces.sql`.
+
+### Vehicle ingredients inside `prod_ai` combos
+
+- IV solutions and preps list the diluent as an ingredient: `SODIUM CHLORIDE` is credited with 371,600 drug rows, mostly from combos.
+- With identity = ingredient set, "drug X in saline" and "drug X" become different identities.
+- Fix: pending. Decide whether vehicle ingredients count toward identity. Revisit after the RxNorm check.
+
+### Placeholder and class terms in `prod_ai`
+
+- `prod_ai` is FDA-filled, yet some values are not ingredients at all. They are placeholders or whole drug classes, and RxNorm returns no rxcui for them.
+- Top unmatched pieces by drug rows (2026-09-29, RxNorm 08-Sep-2026):
+  - placeholders: `COSMETICS` (300,891), `UNSPECIFIED INGREDIENT` (97,356), `DEVICE` (34,262), `INVESTIGATIONAL PRODUCT` (9,047)
+  - classes: `VITAMINS` (230,634), `HERBALS` (54,051), `MINERALS` (39,975), `DIETARY SUPPLEMENT` (38,712), `AMINO ACIDS` (12,525), `INFLUENZA VIRUS VACCINE` (12,909)
+  - `NOS` terms (the product is known only down to a class): `INSULIN NOS` (56,899), `PROBIOTICS NOS` (28,525), `ELECTROLYTES NOS` (10,265), `THYMOCYTE IMMUNE GLOBULIN NOS` (10,009), `GRANULOCYTE COLONY-STIMULATING FACTOR NOS` (8,751)
+- Together about 945k rows, roughly 69% of all unmatched piece-rows (1.37M). No cleaning rule can resolve them, because there is no ingredient set behind `VITAMINS`.
+- Fix: pending. Planning decision on whether these count as match failures or as a separate non-specific category.
+- Query: `dbt/analyses/rxnav_pass1.sql`.
 
 ### Trailing numbers without a unit can be the drug's identity
 
