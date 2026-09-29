@@ -46,13 +46,24 @@ pieces_per_prodai as (
 
   group by prod_ai, n_rows
 
+),
+
+dedup as (
+
+  select
+    distinct(prod_ai),
+    n_rows,
+    piece_trim
+
+  from clean
+
 )
 
 select
   piece_trim,
-  sum(n_rows)
+  sum(n_rows) as sum
 
-from clean 
+from dedup 
 
 group by piece_trim
 
