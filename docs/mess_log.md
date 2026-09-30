@@ -215,7 +215,7 @@ Data quality issues discovered in FAERS/openFDA. Updated as we find them.
   - whole product lines: `AVOBENZONE\HOMOSALATE\OCTISALATE\OCTOCRYLENE OR AVOBENZONE\HOMOSALATE\OCTISALATE\OCTOCRYLENE\OXYBENZONE` (120), multi-season influenza vaccine strings
 - Splitting on `\` alone produces merged junk pieces at each `OR`: `OCTOCRYLENE OR AVOBENZONE`.
 - Such a string has no single RxNorm ingredient set. Tiny in rows (~0.02%), but the interferon rows are real drugs in the mid stratum.
-- Fix: pending. Planning decision: union of all ingredients, keep as ambiguous, or mark unresolved.
+- Fix: decided 2026-09-29 — split on ` OR ` first, status `ambiguous` with candidate sets kept. See `docs/decisions/007-or-prod-ai-ambiguous.md`.
 - Query: `dbt/analyses/prod_ai_pieces.sql`.
 
 ### Vehicle ingredients inside `prod_ai` combos
@@ -232,7 +232,7 @@ Data quality issues discovered in FAERS/openFDA. Updated as we find them.
   - classes: `VITAMINS` (230,634), `HERBALS` (54,051), `MINERALS` (39,975), `DIETARY SUPPLEMENT` (38,712), `AMINO ACIDS` (12,525), `INFLUENZA VIRUS VACCINE` (12,909)
   - `NOS` terms (the product is known only down to a class): `INSULIN NOS` (56,899), `PROBIOTICS NOS` (28,525), `ELECTROLYTES NOS` (10,265), `THYMOCYTE IMMUNE GLOBULIN NOS` (10,009), `GRANULOCYTE COLONY-STIMULATING FACTOR NOS` (8,751)
 - Together about 945k rows, roughly 69% of all unmatched piece-rows (1.37M). No cleaning rule can resolve them, because there is no ingredient set behind `VITAMINS`.
-- Fix: pending. Planning decision on whether these count as match failures or as a separate non-specific category.
+- Fix: decided 2026-09-29 — status `non_specific`, left out of the match-rate denominator. See `docs/decisions/006-placeholders-non-specific.md`.
 - Query: `dbt/analyses/rxnav_pass1.sql`.
 
 ### Trailing numbers without a unit can be the drug's identity
