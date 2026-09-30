@@ -6,7 +6,8 @@ See `docs/decisions/` for architectural rationale.
 
 ## Hard rules
 
-1. Never mutate raw data. Downloads land once and are read-only.
+1. Never mutate raw data. Landed data (`data/json/*`, `data/parquet/*`) is
+   written once and read-only.
    (Enforced by a PreToolUse hook; do not attempt to work around it.)
 2. Every data quality horror discovered goes in `docs/mess_log.md` with an example.
 
