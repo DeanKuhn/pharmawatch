@@ -17,7 +17,5 @@ dbt/profiles.yml
 .venv
 
 logs/
-docs/personal/
-docs/decisions/
 docs/pharmawatch_sprint_brief.md
 scripts/
