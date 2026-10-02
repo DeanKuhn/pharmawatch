@@ -204,6 +204,7 @@ Data quality issues discovered in FAERS/openFDA. Updated as we find them.
 - These values won't match RxNorm ingredient names directly.
 - The same brand family can have different ingredient sets. `LISTERINE` maps to 4 different `prod_ai` values (purity 0.57).
 - Fix: pending. Scale unknown. The RxNorm check will list them among the pieces that don't match.
+- Bare brands also match RxNorm `BN` concepts and resolve correctly via `related?tty=IN`: `BACTROBAN` (31 rows), `PLASMA-LYTE A` (11), `RUCONEST` (1) (2026-10-02, pass 2 TTY mix).
 
 ### ` OR ` in `prod_ai`: several candidate products, not one
 
@@ -266,10 +267,51 @@ Data quality issues discovered in FAERS/openFDA. Updated as we find them.
 - Harmless at the IN level: all returned ids map to the same IN via `related?tty=IN`. The salt-level identity is lost for pieces that fell through to the normalized lookup.
 - Fix: keep `search=2`. Multi-id pieces of this shape should collapse to one IN set (pass 2 analysis #3). The planned salt-strip fallback only matters for pieces that fail the normalized lookup too.
 
+### RxNorm normalized match can land on a different drug (CETRAXATE → ciprofloxacin)
+
+- Pieces `CETRAXATE` (29 rows) and `CETRAXATE HYDROCHLORIDE` (49) both returned `848957` `Cetraxal` (BN), a brand of ciprofloxacin ear drops. `related?tty=IN` → `2551` ciprofloxacin. Cetraxate is an unrelated gastroprotective drug (Japan).
+- Tested 2026-10-02 against RxNorm 08-Sep-2026:
+  - `CETRAXATE` `search=0` → empty; `search=2` → `848957`. The exact lookup fails and the normalized lookup makes the match.
+  - Cetraxate did exist in RxNorm: `20613`, now `NotCurrent` (empty properties). Retired, so it can't be matched exactly.
+  - `CETRAX` and `CETRAXAL` → `848957`; `CETRAXOL`, `CETRAXITE` → empty. Normalization appears to strip some word endings (`-ATE`, `-AL`), not only whole salt words, so different names can reduce to the same normalized form (inferred from behavior, not documented).
+- This breaks the assumption in the salt-strip entry above that a normalized match always stays within the same IN. A piece that is retired or missing in RxNorm can be matched to whatever current concept shares its normalized form.
+- Found via the pass 2 TTY mix (non-ingredient rxcuis, `dbt/analyses/rxnav_pass2.sql`). Scale unknown: a BN hit made this one visible, but a collision that lands on an IN would look like an ordinary ingredient match.
+- Measured 2026-10-02 (`dbt/analyses/rxnav_query_4.sql`): 1,784 pieces / 2.08M rows went through the normalized path; 1,429 / 1.46M are flagged (an IN name not contained in the piece). The flag is mostly synonyms (DEXTROSE → glucose, METAMIZOLE → dipyrone). Hand review by rows down to 1,159 rows/piece (~93% of flagged rows) found no further cross-drug matches; remaining tail ~106k rows. Known cross-drug cases: this one and the fake-salt multi-IN pieces in the next entry (CITALOPRAM → +escitalopram).
+- Fix: pending (planning chat).
+
+### One piece → several different INs (multi-id pieces that don't collapse)
+
+- Of 206 pieces with 2+ rxcuis, only 92 (74,829 rows) collapse to one IN via `related?tty=IN`. 114 (47,562 rows) keep 2+ INs, so their identity set is bigger than the one substance reported (2026-10-02, RxNorm 08-Sep-2026, `dbt/analyses/rxnav_query_3.sql`).
+- Allergenic twin (most of the 114). RxNorm has a separate IN for the allergy-testing extract of many foods, plants, molds and pollens. A bare name matches both: `CRANBERRY` (9,206 rows) → cranberry preparation + cranberry allergenic extract. Same for `GARLIC` (3,520), `CINNAMON` (3,420), `GINGER` (1,836), `SACCHAROMYCES CEREVISIAE` (2,909), grass pollens, dozens of foods. In FAERS these are almost always supplements or foods, not allergen extracts.
+- Same substance, two IN concepts: `TOCOPHEROL` (5,554) → vitamin E + tocopherol; `RETINOL` (4,060) → vitamin A + all-trans-retinol; `LYSOZYME` → lysozyme + muramidase; `DIASTASE` → alpha-amylase + amylase; `CARNITINE` → carnitine + levocarnitine.
+- Different drugs (same failure as the CETRAXATE entry). Mostly pieces naming a salt that doesn't exist, so the exact lookup fails and the normalized lookup returns related but distinct INs:
+  - `CITALOPRAM HYDROCHLORIDE` (1,148) → citalopram + escitalopram. Separate drugs with separate labels; citalopram's QT warning is a known signal.
+  - `OFLOXACIN HYDROCHLORIDE` (24) → ofloxacin + levofloxacin; `AMPHETAMINE PHOSPHATE` (2) → amphetamine + dextroamphetamine. The racemate gets its single enantiomer too.
+  - `QUININE BENZOATE` (123) → quinine + quinidine (an antiarrhythmic).
+  - `CHLORPHENIRAMINE HYDROCHLORIDE` (89) → chlorpheniramine + chlorine.
+  - `SCOPOLAMINE HYDROCHLORIDE` (22) → scopolamine + methscopolamine; `GALANTAMINE HYDROCHLORIDE` (8) → galantamine + benzgalantamine.
+  - `ISOPROPYL NITRATE` (3) → isopropyl palmitate / stearate / maleate / acetate. None is the reported substance.
+  - `STRONTIUM ACETATE` (1) → strontium + nitrate + chloride + bromide salts. RxNorm models these salts as INs, not PINs, so they don't collapse.
+- Split artifacts show up too: `MENTHOL)`, `MENTHOL?`, `PHOSPHORIC ACID)`, `. ALPHA.-TOCOPHEROL ACETATE, D-`. The `)` pieces come from splitting brand-wrapped `prod_ai` on `\` (see brand names entry).
+- Small in rows (~0.07% of matched piece-rows), but it shows the CETRAXATE pattern repeating. A wrong salt name sent through the normalized lookup can reach a different drug. Single-id pieces can hit the same thing invisibly.
+- Fix: pending (planning chat). Choosing among several INs for one piece: drop allergenic extracts, prefer exact name match, or flag as ambiguous.
+
+### RxNorm IN merges distinct biologic products
+
+- For biologics, vaccines and radiopharmaceuticals, the RxNorm IN is coarser than the product. Different products resolve to the same IN, so identity = IN set merges them (2026-10-02, RxNorm 08-Sep-2026, `dbt/analyses/rxnav_query_4.sql`):
+  - `TOZINAMERAN` (Pfizer, 48,359) and `ELASOMERAN` (Moderna, 30,651) → 'SARS-CoV-2 (COVID-19) vaccine, mRNA spike protein'. Their myocarditis signals are known to differ. `AD26.COV2.S` (J&J, 2,498) → 'vector non-replicating', which other vector vaccines likely share.
+  - `LAPINE T-LYMPHOCYTE IMMUNE GLOBULIN` (rabbit, Thymoglobulin, 17,044) and `EQUINE THYMOCYTE IMMUNE GLOBULIN` (horse, Atgam, 1,185) → the same 'lymphocyte immune globulin, anti-thymocyte globulin'. The species qualifier is lost (see parentheticals entry).
+  - `LUTETIUM OXODOTREOTIDE LU-177` (7,417) → dotatate. The isotope is lost: Lu-177 radiotherapy would merge with Ga-68 / Cu-64 dotatate diagnostic scans. Same for `IOBENGUANE SULFATE I-131` → 3-iodobenzylguanidine (1).
+  - `CONESTAT ALFA` (recombinant, 3,359) and `HUMAN C1-ESTERASE INHIBITOR` (plasma-derived, 39,210) → C1 esterase inhibitor.
+- Not a matching error: RxNorm models these as one ingredient. Flu vaccine strain antigens collapse the same way (`… A/SINGAPORE/… (H3N2) …` → 'influenza A virus (H3N2) antigen').
+- Fix: pending (planning chat). Decide identity granularity for vaccines, immune globulins and radiopharmaceuticals. The RxNorm IN alone isn't enough.
+
 ### Mangled non-ASCII characters in `drugname`
 
 - `DEXTROSA AL 5% + CLORURO DE SODIO AL 0.9% BAXTER SOLUCI?N INYECTABLE` — `ó` replaced by `?`.
 - Not yet determined whether the `?` is in FDA's source file or introduced during parse. Check raw bytes before assuming.
+- Also in `prod_ai` (FDA-filled): piece `CAFFEINE?` (2 rows) matched `142218` (MIN, benzoate / caffeine) instead of caffeine alone, which adds an ingredient that probably isn't there (2026-10-02, `dbt/analyses/rxnav_pass2.sql`).
+- `^` in place of an apostrophe in `prod_ai`: `MEASLES VIRUS STRAIN ENDERS^ ATTENUATED EDMONSTON LIVE ANTIGEN` (1,361 rows) next to `ENDERS'` (1,200); `RIBOFLAVIN 5^-PHOSPHATE SODIUM` (13,392). Both spellings resolve to the same RxNorm IN, so harmless at IN level, but they split as raw strings.
 
 ### Suspected report clusters (unverified)
 
