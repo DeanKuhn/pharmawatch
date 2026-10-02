@@ -305,6 +305,16 @@ Data quality issues discovered in FAERS/openFDA. Updated as we find them.
   - `CONESTAT ALFA` (recombinant, 3,359) and `HUMAN C1-ESTERASE INHIBITOR` (plasma-derived, 39,210) → C1 esterase inhibitor.
 - Not a matching error: RxNorm models these as one ingredient. Flu vaccine strain antigens collapse the same way (`… A/SINGAPORE/… (H3N2) …` → 'influenza A virus (H3N2) antigen').
 - Fix: pending (planning chat). Decide identity granularity for vaccines, immune globulins and radiopharmaceuticals. The RxNorm IN alone isn't enough.
+- Moderna is also split: `ELASOMERAN` resolves to the mRNA vaccine IN, but its development code `CX-024414` (3,613) gets no rxcui at all; AstraZeneca's `AZD-1222` (8,494) likewise. See next entry.
+
+### Real drugs RxNorm can't match
+
+- After setting aside placeholders (006) and ` OR ` (007), 379k drug rows (0.6%) have a `prod_ai` with a piece RxNorm doesn't match. In the head stratum it's 69 strings / 226k rows. The top 20 are real, well-identified drugs, not junk (2026-10-02, RxNorm 08-Sep-2026, `dbt/analyses/rxnav_query_5.sql`; counts are `prod_ai` drug rows, all roles):
+  - **Salts the normalized lookup doesn't strip:** `ASPIRIN DL-LYSINE` (24,903), `ASPIRIN LYSINE` (6,913), `AZTREONAM LYSINE` (16,785), `PANTOPRAZOLE MAGNESIUM` (8,834), `PANTOPRAZOLE SODIUM ANHYDROUS` (4,602), `HYDROXYCHLOROQUINE DIPHOSPHATE` (6,278). Lysine, diphosphate, magnesium and anhydrous apparently aren't on RxNorm's salt-word list.
+  - **Non-US drugs absent from RxNorm:** `REBAMIPIDE` (9,694), `LOXOPROFEN SODIUM` (8,095), `BILASTINE` (5,071), `ETIZOLAM` (4,966), `ELDECALCITOL` (4,095), `DELORAZEPAM` (2,968), `GIMERACIL\OTERACIL\TEGAFUR` (S-1, 3,476), `CLOSTRIDIUM BUTYRICUM SPORES STRAIN M-55` (5,518). These have no IN, so identity = IN set (001) can't represent them.
+  - **Development codes:** `AZD-1222` (8,494), `CX-024414` (3,613). Both are COVID vaccines (see biologics entry).
+  - **Blood products and class-like terms:** `HUMAN RED BLOOD CELL` (6,748), `HUMAN PLATELET, ALLOGENIC` (3,335), `ANTIHEMOPHILIC FACTOR, PEGYLATED (MW 20000) HUMAN SEQUENCE RECOMBINANT` (3,472), `PENICILLIN` (5,767; G or V is unknown, so probably `non_specific`).
+- Fix: pending. Salts → our own salt-strip fallback (strip salt word, retry exact). Non-US drugs → identity fallback needed (planning chat). Codes, blood products → biologic granularity decision.
 
 ### Mangled non-ASCII characters in `drugname`
 
