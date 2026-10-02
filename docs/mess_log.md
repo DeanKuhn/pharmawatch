@@ -254,6 +254,18 @@ Data quality issues discovered in FAERS/openFDA. Updated as we find them.
 - Not yet checked in the data: `prod_ai` on `ZANTAC 360` rows should be `FAMOTIDINE`. Other reused brands are likely (unknown scale).
 - Fix: pending. Keep the full brand string in the lookup key. Consider whether the modal `prod_ai` needs a time window for brands like this.
 
+### RxNorm normalized match strips salt words, returns base IN + all salts
+
+- Pass 1 uses `/rxcui.json?name=...&search=2` (exact, else normalized). When the exact lookup fails, the normalized lookup drops the salt word and returns the base IN plus every salt of it.
+- Piece `AMLODIPINE MESYLATE` (no such concept in RxNorm) returned `104416` amlodipine besylate (PIN), `17767` amlodipine (IN), `2184116` amlodipine benzoate (PIN).
+- Tested 2026-10-01 against RxNorm 08-Sep-2026, `search=0` vs `search=1`:
+  - `METFORMIN BESYLATE` (fake salt): 0 → empty; 1 → `6809` metformin (IN), `235743` metformin hydrochloride (PIN). Same behavior on another drug.
+  - `AMLODIPINE BESYLATE` (real salt): 0 → `104416` only; 1 → all three amlodipine ids. Normalization strips the salt word even when the salt exists, so `search=2` keeps the exact salt only when the exact lookup hits.
+  - `AMLODIPINE FOOBAR`: empty at both. Arbitrary unknown words are not dropped; normalization appears to know a list of salt/form words (inferred from behavior, not documented).
+  - `search=9` (approximate) on `AMLODIPINE MESYLATE` returned `1426388` mesylate (IN), a different ingredient. Do not use approximate.
+- Harmless at the IN level: all returned ids map to the same IN via `related?tty=IN`. The salt-level identity is lost for pieces that fell through to the normalized lookup.
+- Fix: keep `search=2`. Multi-id pieces of this shape should collapse to one IN set (pass 2 analysis #3). The planned salt-strip fallback only matters for pieces that fail the normalized lookup too.
+
 ### Mangled non-ASCII characters in `drugname`
 
 - `DEXTROSA AL 5% + CLORURO DE SODIO AL 0.9% BAXTER SOLUCI?N INYECTABLE` — `ó` replaced by `?`.
