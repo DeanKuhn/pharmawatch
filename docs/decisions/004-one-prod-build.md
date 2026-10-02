@@ -9,3 +9,5 @@
 **Rejected:** partial or incremental prod rebuilds after each rule change.
 
 **Consequences:** Prod lags dev until normalization is done. All measurement happens in dev.
+
+**Amended 2026-10-02 (013):** two prod builds: one for the MVP on good-enough identity, one after the v1.1 normalization work.
