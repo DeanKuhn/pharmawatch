@@ -44,9 +44,7 @@ target as (
   select
     drugname,
     drugname_clean,
-    count(*) as n --,
-    -- punct_out,
-    -- parens_out
+    count(*) as n
 
   from cleansed
 
