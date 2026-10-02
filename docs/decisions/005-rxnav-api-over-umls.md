@@ -9,3 +9,5 @@
 **Rejected:** waiting for the UMLS license.
 
 **Consequences:** 10,552 pieces, ~20 min per pass. Responses land once as raw JSON in `data/json/rxnav/` (write-once, hard rule 1), each with its RxNorm version (first pass: 08-Sep-2026). Fetch: `scripts/rxnorm_fetch.py`.
+
+**Amended (2026-10-02):** lookups use `search=0` on salt-stripped pieces, not `search=2` (see 008).

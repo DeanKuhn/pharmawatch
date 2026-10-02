@@ -9,3 +9,5 @@
 **Rejected:** raw or cleaned name as identity; raw `prod_ai` string as identity.
 
 **Consequences:** Salt variants collapse to one drug. Needs a piece → IN mapping (see 005). Still open: whether vehicle ingredients (sodium chloride, dextrose, water) count toward the set. Revisit after RxNorm pass 2.
+
+**Amended (2026-10-02):** the set may also hold `local:` tokens (010, 011) and `nonspecific:` tokens (006 amendment). Vehicles: see 012.
