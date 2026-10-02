@@ -55,7 +55,6 @@ def fetch_rxnorm_pass_2():
         succeeded_prop = 0
         succeeded_rel = 0
 
-        ids = ["1191", "104416"]
         for rxcui in ids:
             if ((succeeded_prop + failed_prop) % 500 == 0) and (succeeded_prop + failed_prop != 0):
                 log.info(f"Succeeded / Failed Properties: {succeeded_prop} / {failed_prop}")
@@ -72,7 +71,7 @@ def fetch_rxnorm_pass_2():
                     time.sleep(0.06)
                 else:
                     prop_record = {
-                        "piece": rxcui,
+                        "rxcui": rxcui,
                         "url": str(properties.url),
                         "fetched_at": datetime.now(tz=UTC).isoformat(),
                         "rxnorm_version": live_version,
@@ -95,7 +94,7 @@ def fetch_rxnorm_pass_2():
                     time.sleep(0.06)
                 else:
                     rel_record = {
-                        "piece": rxcui,
+                        "rxcui": rxcui,
                         "url": str(related.url),
                         "fetched_at": datetime.now(tz=UTC).isoformat(),
                         "rxnorm_version": live_version,
