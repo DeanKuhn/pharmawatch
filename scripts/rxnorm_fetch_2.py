@@ -1,5 +1,6 @@
 """Fetch data from RxNorm API endpoint for IN, TTY, PIN, BN, and relate to IN."""
 
+
 import json
 import logging
 import time
@@ -9,9 +10,18 @@ from pathlib import Path
 import duckdb
 import httpx
 
-logging.basicConfig(level=logging.INFO)
-logging.getLogger("httpx").setLevel(logging.WARNING)
 log = logging.getLogger(__name__)
+log_path = Path("logs/rx_norm_pass_2.log")
+log_path.parent.mkdir(parents=True, exist_ok=True)
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(message)s",
+    handlers=[
+        logging.FileHandler(log_path),
+        logging.StreamHandler(),
+    ],
+)
 
 BASE = "https://rxnav.nlm.nih.gov/REST"
 target = Path("data/json/rxnav")
