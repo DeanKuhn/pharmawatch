@@ -9,3 +9,5 @@
 **Rejected:** counting them as match failures (hides the fixable failures); mapping them to class-level concepts (a second kind of identity, contradicts 001).
 
 **Consequences:** The match rate measures normalization quality; the `non_specific` count shows coverage loss. Drug rows without an identity drop out of drug-specific counts, but their reports stay in the PRR/ROR background totals. Still open: rollup for mixed strings like `ACETAMINOPHEN\VITAMINS`.
+
+**Amendment (2026-10-02, gated):** A mixed string keeps its placeholder as a token in the identity set: `{rxcui:APAP, nonspecific:VITAMINS}`. That is its own product, so plain acetaminophen stays clean, and ingredient-level views still see the APAP exposure. Same pattern as the mixed-source sets in 010. Rejected: worst-piece-wins (drops a known exposure); dropping the placeholder piece (merges a combo into the single drug). **Gate:** count mixed vs pure strings among the 326 `non_specific` strings (893k rows); if mixed strings are negligible, keep worst-piece-wins.
