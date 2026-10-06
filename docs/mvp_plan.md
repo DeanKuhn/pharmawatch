@@ -4,9 +4,9 @@ Goal: live product at pharma.deanslist.dev — search a drug, see ranked signals
 open a drug–reaction pair with counts and caveats. Scope: decisions 013, 014.
 
 ## A — Good-enough drug identity
-- [ ] A1 Parens rule keeps species/isotope qualifiers (011). Measure parenthetical
+- [x] A1 Parens rule keeps species/isotope qualifiers (011). Measure parenthetical
       contents first; re-run stratum metric vs 94.5/82.4/57.8/26.3/90.6.
-- [ ] A2 drugname → prod_ai lookup promoted from `dbt/analyses/prod_ai_lookup_cleansed.sql`
+- [x] A2 drugname → prod_ai lookup promoted from `dbt/analyses/prod_ai_lookup_cleansed.sql`
       to a model (002).
 - [ ] A3 Seed map for 011 biologics/dev codes (Moderna, Pfizer, AZD-1222, ATG species,
       Lu-177 dotatate, C1-INH); confirm exact piece strings from data.
