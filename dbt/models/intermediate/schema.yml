@@ -62,3 +62,61 @@ models:
         description: "Cases reporting this reaction but not this drug"
       - name: d
         description: "Cases reporting neither this drug nor this reaction"
+
+  - name: int_drugname_lookup
+    description: "Cleaned drugname → modal prod_ai, built from stg_drug rows with prod_ai filled (all roles). Grain: one row per drugname_clean. All bands kept; which bands fill prod_ai is decided downstream (decision 002)."
+    columns:
+      - name: drugname_clean
+        description: "Cleaned drugname (clean_drugname macro)"
+        tests:
+          - not_null
+          - unique
+      - name: modal_ai
+        description: "Most frequent prod_ai for this name; ties broken arbitrarily"
+        tests:
+          - not_null
+      - name: support
+        description: "Rows with prod_ai filled for this name"
+      - name: band
+        description: "low_support (support < 5), pure (purity >= 0.95), mostly (>= 0.8), else ambiguous"
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['low_support', 'pure', 'mostly', 'ambiguous']
+      - name: purity
+        description: "Share of support held by modal_ai"
+      - name: n_ai
+        description: "Distinct prod_ai values for this name"
+
+  - name: int_drug_resolved
+    description: "stg_drug with prod_ai filled from int_drugname_lookup where FDA left it null (mostly pre-2014Q3). Only 'pure' lookup matches fill. Original prod_ai is kept untouched (decision 003). Grain: one row per stg_drug row. primaryid + drug_seq is not a key (see mess_log), so don't join back to stg_drug on it; carry needed columns here instead."
+    tests:
+      - dbt_utils.equal_rowcount:
+          arguments:
+            compare_model: ref('stg_drug')
+    columns:
+      - name: primaryid
+        description: "Case identifier"
+        tests:
+          - not_null
+      - name: drugname
+        description: "Drug name as reported (upper/trimmed)"
+      - name: drugname_clean
+        description: "Cleaned drugname (clean_drugname macro); lookup join key"
+      - name: prod_ai
+        description: "Active ingredient(s) as filled by FDA; null for most pre-2014Q3 rows"
+      - name: band
+        description: "Lookup band for drugname_clean (low_support, pure, mostly, ambiguous); null when the name isn't in the lookup"
+        tests:
+          - accepted_values:
+              arguments:
+                values: ['low_support', 'pure', 'mostly', 'ambiguous']
+      - name: prod_ai_resolved
+        description: "prod_ai if reported, else the lookup's modal_ai when band = 'pure', else null"
+      - name: prod_ai_source
+        description: "'reported' (FDA-filled), 'lookup' (filled from a pure lookup match), or null (unresolved)"
+        tests:
+          - accepted_values:
+              arguments:
+                values: ['reported', 'lookup']
