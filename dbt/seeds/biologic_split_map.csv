@@ -1,0 +1,19 @@
+piece,identity,identity_source,tty,family,note
+TOZINAMERAN,rxcui:2468230,rxnorm,PIN,covid_mrna,Pfizer BNT162b2 (Comirnaty)
+FAMTOZINAMERAN,rxcui:2468230,rxnorm,PIN,covid_mrna,Pfizer Omicron BA.4/BA.5 update; folded into parent
+RAXTOZINAMERAN,rxcui:2468230,rxnorm,PIN,covid_mrna,Pfizer Omicron XBB.1.5 update; folded into parent
+RILTOZINAMERAN,rxcui:2468230,rxnorm,PIN,covid_mrna,Pfizer variant update; no RxNav match; folded into parent
+BNT162B2 OMICRON (BA.4/BA.5),rxcui:2468230,rxnorm,PIN,covid_mrna,Pfizer Omicron update; folded into parent
+BNT162B2 OMICRON (KP.2),rxcui:2468230,rxnorm,PIN,covid_mrna,Pfizer Omicron update; folded into parent
+BNT162B2 OMICRON (LP.8.1),rxcui:2468230,rxnorm,PIN,covid_mrna,Pfizer Omicron update; folded into parent
+ELASOMERAN,rxcui:2470232,rxnorm,PIN,covid_mrna,Moderna mRNA-1273 (Spikevax)
+CX-024414,rxcui:2470232,rxnorm,PIN,covid_mrna,Moderna dev code for mRNA-1273; no RxNav match
+IMELASOMERAN,rxcui:2470232,rxnorm,PIN,covid_mrna,Moderna bivalent component; no RxNav match; folded into parent
+AZD-1222,local:AZD-1222,local,,covid_vector,AstraZeneca ChAdOx1 (Vaxzevria); not in RxNorm
+LAPINE T-LYMPHOCYTE IMMUNE GLOBULIN,rxcui:107044,rxnorm,PIN,atg,Rabbit ATG (Thymoglobulin)
+EQUINE THYMOCYTE IMMUNE GLOBULIN,rxcui:91601,rxnorm,PIN,atg,Horse ATG (Atgam)
+HUMAN C1-ESTERASE INHIBITOR,rxcui:809864,rxnorm,PIN,c1_inh,Plasma-derived C1-INH
+C1 ESTERASE INHIBITOR (HUMAN),rxcui:809864,rxnorm,PIN,c1_inh,Plasma-derived C1-INH; alternate string
+CONESTAT ALFA,rxcui:1599831,rxnorm,PIN,c1_inh,Recombinant C1-INH (Ruconest)
+LUTETIUM OXODOTREOTIDE LU-177,rxcui:1999335,rxnorm,PIN,dotatate,Lu-177 dotatate therapy (Lutathera)
+DOTATATE GALLIUM GA-68,rxcui:676679,rxnorm,PIN,dotatate,Ga-68 dotatate diagnostic (Netspot)
