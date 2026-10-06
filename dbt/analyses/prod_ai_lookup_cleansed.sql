@@ -6,7 +6,10 @@ with cleansed as (
     role_cod,
 
     -- parenthesis
-    regexp_replace(drugname, '\s*\([^)]*\)', '', 'g') as parens_out,
+    regexp_replace(drugname,
+      '\(\s*(RABBIT|HORSE|EQUINE|I[- ]?131|LU[- ]?177|TC[- ]?99M)\s*\)',
+      ' \1', 'gi') as quals_unwrapped,
+    regexp_replace(quals_unwrapped, '\s*\([^)]*\)', '', 'g') as parens_out,
 
     -- trailing punctuation
     regexp_replace(trim(regexp_replace(parens_out, '[.,;:\s]+$', '')), '\s+', ' ', 'g') as punct_out,
@@ -117,9 +120,28 @@ final as (
 
   group by stratum, band
 
+),
+
+final_2 as (
+
+  select 
+    distinct drugname,
+    count(*) as n,
+    stren_out
+
+  from cleansed
+
+  where stren_out like '%THYMOCYTE%'
+
+  group by drugname, stren_out
+
+  order by n desc
+
 )
 
-select * from final order by stratum, band
+select * from final_2
+
+-- select * from final order by stratum, band
 
 -- spot_check as (
 --
