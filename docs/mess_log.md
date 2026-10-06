@@ -326,7 +326,10 @@ Data quality issues discovered in FAERS/openFDA. Updated as we find them.
   - `LUTETIUM OXODOTREOTIDE LU-177` (7,417) → dotatate. The isotope is lost: Lu-177 radiotherapy would merge with Ga-68 / Cu-64 dotatate diagnostic scans. Same for `IOBENGUANE SULFATE I-131` → 3-iodobenzylguanidine (1).
   - `CONESTAT ALFA` (recombinant, 3,359) and `HUMAN C1-ESTERASE INHIBITOR` (plasma-derived, 39,210) → C1 esterase inhibitor.
 - Not a matching error: RxNorm models these as one ingredient. Flu vaccine strain antigens collapse the same way (`… A/SINGAPORE/… (H3N2) …` → 'influenza A virus (H3N2) antigen').
-- Fix: pending (planning chat). Decide identity granularity for vaccines, immune globulins and radiopharmaceuticals. The RxNorm IN alone isn't enough.
+- The split is only at PIN → IN. Each product has its own PIN in RxNav (2026-10-05, same JSON): `TOZINAMERAN` → `2468230` 'mRNA-BNT162b2', `ELASOMERAN` → `2470232` 'mRNA-1273', `LAPINE…` → `107044` 'rabbit anti-human T-lymphocyte globulin', `EQUINE…` → `91601`, `HUMAN C1-ESTERASE INHIBITOR` → `809864` '(human)', `CONESTAT ALFA` → `1599831` '(recombinant)', `LUTETIUM OXODOTREOTIDE LU-177` → `1999335` 'lutetium Lu 177 dotatate', `DOTATATE GALLIUM GA-68` (200) → `676679`. All roll up to the one shared IN.
+- Variant-update vaccines fragment further: each Pfizer Omicron update is its own PIN (`FAMTOZINAMERAN` / `BNT162B2 OMICRON (BA.4/BA.5)` → `2610243`, `RAXTOZINAMERAN` → `2664825`), while newer INNs `RILTOZINAMERAN` (20) and `IMELASOMERAN` (4) get no rxcui at all. Unrelated near-hits for a `%SARS%` pattern: `SARSAPARILLA`.
+- Fix: done 2026-10-05 (A3). Seed `dbt/seeds/biologic_split_map.csv` maps 18 pieces to the parent PIN rxcui (variant updates and dev codes folded in), `local:AZD-1222` where RxNorm has nothing. `THYMOCYTE IMMUNE GLOBULIN NOS` stays NOS (006). See 011 and 001 amendments. J&J (`AD26.COV2.S`), flu strains and I-131 iobenguane not in the map.
+- Query: `dbt/analyses/a3_seed_piece_strings.sql`.
 - Moderna is also split: `ELASOMERAN` resolves to the mRNA vaccine IN, but its development code `CX-024414` (3,613) gets no rxcui at all; AstraZeneca's `AZD-1222` (8,494) likewise. See next entry.
 
 ### Real drugs RxNorm can't match
