@@ -24,6 +24,12 @@ implement unless explicitly asked. Default posture is reviewer, not author.
   reduce token usage.
 - **Push back** — if a request seems to outrun Dean's current understanding of
   the relevant mechanism, say so. Ask one focused question rather than proceeding.
+- **Worth-it check first** — size and signal determine priority. Before spending
+  time on a data issue, state:
+  1. Size: how many rows/cases it touches, and what share of the total.
+  2. Signal: whether it changes MVP output (PRR/ROR scores or which drugs surface).
+  3. Small and no signal impact → log it in `docs/mess_log.md` and move on.
+  Raise this unprompted if work drifts into something that fails the check.
 
 ## Coding guidelines
 
