@@ -82,6 +82,7 @@ Data quality issues discovered in FAERS/openFDA. Updated as we find them.
 
 - `ZANTAC`: #5 PS drugname (266k rows); 88% filed 2021–2022 vs 1.7k in 2019. Matches the 2020 ranitidine recall and litigation.
   - In `prod_ai` pieces (all roles, 2026-09-28), ranitidine is the #1 ingredient: `RANITIDINE HYDROCHLORIDE` 1,176,437 + `RANITIDINE` 651,188 drug rows. Unchecked: share of reports with reporter occupation `occp_cod = 'LW'` (lawyer) in demo.
+  - Coded drugnames: `RANITIDINE HYDROCHLORIDE (852)` (22,107 rows) and `RANITIDINE HYDROCHLORIDE (156)` (15,129), each a single exact drugname. Looks like bulk submissions with a batch or firm code. Test case for the C2 lawyer flag.
 - `PROACTIV MD ADAPALENE ACNE TREATMENT`: #6 (175k rows) for an OTC acne product, concentrated 2018–2021. Cause unverified.
 - Signals for these reflect reporting pressure, not just pharmacology. Flag rather than rank.
 
@@ -110,6 +111,15 @@ Data quality issues discovered in FAERS/openFDA. Updated as we find them.
 - Resolution: `_pick_richest` — sum child-table row counts, then non-null DEMO field count, then `min(primaryid)` as final deterministic tiebreak.
 - **2,075 primaryids** appear under 2+ caseids. When such a primaryid wins for one case, a primaryid-only join leaks its row under the other case. Fix: keep relation carries `(caseid, primaryid)` pair; DEMO matches on both. Child tables still match on primaryid alone (pre-2013 tables lack caseid).
 - **60 primaryids** win max-caseversion for two different caseids simultaneously. Both can't survive without breaking primaryid as identity key. `_resolve_conflicting_primaryid_rows` collapses on primaryid, dropping 60 cases (0.0003%). Logged at WARNING.
+
+### `drug_seq` is not unique within a case
+
+- Found 2026-10-05 (dev `stg_drug`, all roles): 355,415 `(primaryid, drug_seq)` keys have 2+ rows, 1,071,220 rows total (452,018 PS). Max 103 rows on one key. No null `drug_seq` involved.
+- **Same drug repeated** (352,083 keys, 1,064,556 rows): same name and `prod_ai`, rows differ only in dose/route. `269290221` seq 15, sodium ferric gluconate ×9 with doses 4.64 / 125 / 133 / 17.85 / 1.25. 89,611 keys contain rows identical on name, role, prod_ai, route, dose, lot. Mostly modern era: 9-digit `2xxxxxxxx` primaryids carry 866k of the rows.
+- **Different names under one seq** (3,332 keys, 6,664 rows, legacy ISRs with global-style seqs): `6425543` seq `1012525980` → `TYLENOL` + `CHILDREN'S TYLENOL SUSPENSION`; `6253112` → `TREN XTREME 30MG…` + `TRON XTREME 30MG…`. Looks like two versions of one drug entry.
+- Not yet checked: whether the rows are in FDA's raw files or introduced by parse/dedup (dedup is case-level and never dedupes within a case's drug rows).
+- Impact: `(primaryid, drug_seq)` can't be used as a join key. Same-name repeats collapse in `int_drug_reaction_pairs` (grouped by primaryid + drugname + reaction_pt); the legacy two-name keys count a case under two names until B1 keys on the IN set.
+- Fix: `int_drug_resolved` tested with `equal_rowcount` vs `stg_drug` instead of uniqueness; carry needed columns rather than joining back.
 
 ### Deleted-case lists
 
@@ -141,6 +151,7 @@ Data quality issues discovered in FAERS/openFDA. Updated as we find them.
 
 - Suffix junk: `NEVIRAPINE (NEVIRAPINE) (NR)`, `METHADONE (NGX)`.
 - Non-English spelling + manufacturer + strength in one string: `TOPIRAMAT RANBAXY 25MG TABLET`.
+- Separator and descriptor noise the cleaning rules don't catch: `ATG//ANTITHYMOCYTE IMMUNOGLOBULIN` (13), `ANTITHYMOCYTE IMMUNOGLOBULIN SOLUTION, STERILE` (12), `ATG [ANTITHYMOCYTE IMMUNOGLOBULIN]` (100; brackets aren't stripped like parentheses).
 - Appears truncated mid-name: `CORICIDIN HBP COUGH + COLD (CHLORPHENIRAMINE MALEATE/DEXTROMETHORPHAN ` (trailing space, no closing paren).
 - Each variant counts as its own drug, so real drugs are split into many small ones. Small `drug_total` + small `reaction_total` → PRRs in the millions (e.g. Coricidin/CIRCUMSTANTIALITY: a=21, b=29, c=9, PRR ≈ 960k, χ² ≈ 5.77M after `upper(trim(reaction_pt))`).
 - Scale (2026-09-25, dev `stg_drug`, `role_cod = 'PS'`, after `upper(trim())`, ~20.88M rows):
@@ -152,6 +163,7 @@ Data quality issues discovered in FAERS/openFDA. Updated as we find them.
   - Distinct names: all PS 139,460 → 107,233 (−23%); PS with null `prod_ai` 70,771 → 53,367 (−25%).
   - Lookup pure share (≥95% one `prod_ai`), head / upper-mid / mid / tail / overall: baseline 92.8 / 78.2 / 45.0 / 9.3 / 88.0 → 94.5 / 82.4 / 57.8 / 26.3 / 90.6.
   - Residual 414,964 rows (9.4% of target, ~2.0% of all PS rows): no_match 279,679, mostly + ambiguous 114,079 (mostly salt noise), low_support 21,206.
+  - Promoted to dbt 2026-10-05 (A2): `clean_drugname` macro → `stg_drug.drugname_clean`, `int_drugname_lookup`, `int_drug_resolved` (fills from pure only). With the A1 qualifier keep and the dangling-paren rule: 94.5 / 82.5 / 58.2 / 27.6 / 90.6; 4,003,961 PS rows resolved; residual 413,449 (no_match 277,044). Query: `dbt/analyses/finished_int_prod_ai_lookup.sql`.
   - "Pure" is still a `prod_ai` string, not an identity.
   - Query: `dbt/analyses/prod_ai_lookup_cleansed.sql`.
 - Fix: pending — RxNorm normalization (prod_ai → IN set; RxNav for the residual).
@@ -194,9 +206,19 @@ Data quality issues discovered in FAERS/openFDA. Updated as we find them.
 - Removing parentheses from names helps overall: it fills 85k more rows via the lookup, and the mid-stratum pure share goes from 45.0% to 53.7%. Most of what gets removed is junk: `CITALOPRAM (UNKNOWN)`, `TRAMADOL (SIMILAR TO NDA 21-745)`, `NAPROXEN SODIUM ({= 220 MG)`.
 - But some parentheses mark a different drug:
   - isotope: `SODIUM IODIDE (I 131)` becomes `SODIUM IODIDE`, which merges radioactive iodine therapy with plain sodium iodide. The isotope also appears without parentheses: `SODIUM IODIDE I 131` (170 PS rows with null `prod_ai`) becomes `SODIUM IODIDE I` if trailing bare numbers are stripped.
-  - species: `ANTI-THYMOCYTE GLOBULIN (RABBIT)` becomes `ANTI-THYMOCYTE GLOBULIN`, which merges the rabbit and horse products (Thymoglobulin vs Atgam). Lookup purity is 0.56. Insulin (PORCINE/BOVINE) is the same trap. Not checked in the data yet.
-- Fix: pending. The cleaning rule should keep isotope and species qualifiers.
-- Query: `dbt/analyses/prod_ai_lookup_cleansed.sql`.
+  - species: `ANTI-THYMOCYTE GLOBULIN (RABBIT)` becomes `ANTI-THYMOCYTE GLOBULIN`, which merges the rabbit and horse products (Thymoglobulin vs Atgam). Lookup purity is 0.56. Insulin (PORCINE/BOVINE) is the same trap.
+- Measured 2026-10-02 (all rows, `stg_drug`, 75.1M): 1,208,087 rows (1.6%) contain `(` or `)`. Contents are mostly junk: `UNKNOWN` (60,758), `CAPLET` (28,477), `MANUFACTURER UNKNOWN`, `UNSPECIFIED`, NDA/manufacturer codes, form words, or the ingredient behind a brand (`TELAVIC (TELAPREVIR)`).
+  - Qualifiers as whole contents: `RABBIT` 4,708, `BOVINE` 1,957, `I 131` 973, `HORSE` 388, `LU 177` 95, `TC-99M` 65, `PORCINE` 60, `TC99M` 43, `EQUINE` 43. No `GA 68` or `LAPINE`. Same isotope spelled several ways (`TC-99M` / `TC99M`), same species too (`HORSE` / `EQUINE`).
+  - Where it matters (PS, null `prod_ai`, 4.4M rows): 160k rows have parentheses, and only 926 parentheticals match any qualifier (including PORCINE/BOVINE). Small.
+- Malformed parentheses: 38,171 rows (3.2% of rows with parentheses, 0.05% of all rows) are unbalanced (`(` count ≠ `)` count), nested, or have `)` before any `(`.
+  - Nested: `SYSTANE (HYPROMELLOSE 2910 (4000 MPA.S))`. The old strip regex `\([^)]*\)` stops at the first `)` and leaves `SYSTANE)`.
+  - Unbalanced: `CORICIDIN HBP COUGH + COLD (CHLORPHENIRAMINE MALEATE/DEXTROMETHORPHAN ` passes through the strip untouched. Same for a dangling `(`: `ANTITHYMOCYTE IMMUNOGLOBULIN (` (21 rows) stays a separate key after cleaning.
+- Fix (2026-10-02, A1): unwrap whole-contents RABBIT / HORSE / EQUINE / I 131 / LU 177 / TC-99M before stripping (spellings not normalized; PORCINE/BOVINE still stripped). Species also merged later by RxNorm IN (see biologics entry) → 011 seed map.
+  - Wired in 2026-10-04: upper-mid ambiguous 72 names / 13,230 rows → 70 / 13,067; upper-mid pure +2 names / +163 rows. Other strata moved by a few rows. Bonus: `ANTI-THYMOCYTE GLOBULIN (RABBIT) NOS` (2,247) now shares a key with `ANTI-THYMOCYTE GLOBULIN RABBIT NOS` (88).
+  - Limits: the biggest ATG names carry no species at all, `THYMOCYTE IMMUNE GLOBULIN NOS` (5,519) and `ANTITHYMOCYTE IMMUNOGLOBULIN` (3,765), so no parens rule resolves them. Word order still splits keys: `RABBIT ANTITHYMOCYTE GLOBULIN` vs `ANTI-THYMOCYTE GLOBULIN RABBIT`. Both → A3 seed map.
+  - Dangling-paren rule added 2026-10-05: strip from an unclosed `(` to end of string, after the closed-paren strip. +1,352 pure PS rows, almost all mid/tail; head unchanged. Nested case still leaves `SYSTANE)`.
+- Done 2026-10-05 (A1). Check on `int_drug_resolved`: rabbit keys → `LAPINE T-LYMPHOCYTE IMMUNE GLOBULIN` (`ANTI-THYMOCYTE GLOBULIN RABBIT NOS` 2,335, `ANTITHYMOCYTE IMMUNOGLOBULIN RABBIT` 1,617); horse/equine keys → `EQUINE THYMOCYTE IMMUNE GLOBULIN` (`ANTITHYMOCYTE IMMUNOGLOBULIN HORSE` 206). No species key lands on the wrong species. Species-less names resolve to FDA's own `THYMOCYTE IMMUNE GLOBULIN NOS`, not a guess. Unresolved species keys are word order, comma forms (`…, EQUINE`), misspellings, manufacturer suffixes — mostly 1-row names.
+- Query: `dbt/analyses/prod_ai_lookup_cleansed.sql`, `dbt/analyses/parenthesis.sql`, `dbt/analyses/horse_vs_rabbit.sql`.
 
 ### Brand names inside `prod_ai`
 
@@ -321,6 +343,7 @@ Data quality issues discovered in FAERS/openFDA. Updated as we find them.
 - `DEXTROSA AL 5% + CLORURO DE SODIO AL 0.9% BAXTER SOLUCI?N INYECTABLE` — `ó` replaced by `?`.
 - Not yet determined whether the `?` is in FDA's source file or introduced during parse. Check raw bytes before assuming.
 - Also in `prod_ai` (FDA-filled): piece `CAFFEINE?` (2 rows) matched `142218` (MIN, benzoate / caffeine) instead of caffeine alone, which adds an ingredient that probably isn't there (2026-10-02, `dbt/analyses/rxnav_pass2.sql`).
+- `?` in place of a hyphen in `drugname`: `OXYCODONE HCL CR TABLETS (SIMILAR TO NDA 22?272)` (20,217 rows) next to `(SIMILAR TO NDA 22-272)` (11,219); `RHODES 91?490` (13,588) vs `RHODES 91-490` (3,657); `MORPHINE SULFATE EXTENDED?RELEASE TABLETS`; `ANTI?THYMOCYTE GLOBULIN (RABBIT) NOS` (269) vs `ANTI-THYMOCYTE …` (2,247), which survives cleaning as a separate key. Probably an en dash. Same source check as above.
 - `^` in place of an apostrophe in `prod_ai`: `MEASLES VIRUS STRAIN ENDERS^ ATTENUATED EDMONSTON LIVE ANTIGEN` (1,361 rows) next to `ENDERS'` (1,200); `RIBOFLAVIN 5^-PHOSPHATE SODIUM` (13,392). Both spellings resolve to the same RxNorm IN, so harmless at IN level, but they split as raw strings.
 
 ### Suspected report clusters (unverified)
