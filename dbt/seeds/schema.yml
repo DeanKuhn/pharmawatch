@@ -1,0 +1,43 @@
+version: 2
+
+seeds:
+  - name: biologic_split_map
+    description: "Explicit piece → identity overrides for biologics and dev codes where the RxNorm IN merges clinically distinct products (decision 011, amended 2026-10-05; exception to 001). Applied first in int_piece_ingredients, before the RxNav IN set. Grain: one row per prod_ai piece."
+    config:
+      column_types:
+        piece: varchar
+        identity: varchar
+        identity_source: varchar
+        tty: varchar
+        family: varchar
+        note: varchar
+    tests:
+      - dbt_utils.expression_is_true:
+          arguments:
+            expression: "(identity_source = 'rxnorm' and tty = 'PIN' and identity like 'rxcui:%') or (identity_source = 'local' and tty is null and identity like 'local:%')"
+    columns:
+      - name: piece
+        description: "Exact prod_ai piece string (split on '\\', upper(trim)), as it appears in int_drug_resolved.prod_ai_resolved"
+        tests:
+          - not_null
+          - unique
+      - name: identity
+        description: "Identity element: 'rxcui:<PIN rxcui>', or 'local:<token>' where RxNorm has no concept. Variant updates and dev codes fold into the parent PIN."
+        tests:
+          - not_null
+      - name: identity_source
+        description: "rxnorm | local (decision 010)"
+        tests:
+          - accepted_values:
+              arguments:
+                values: ['rxnorm', 'local']
+      - name: tty
+        description: "RxNorm term type of the identity. Always PIN for rxnorm rows, so seeded pieces are never rolled up to their IN. Null for local rows."
+      - name: family
+        description: "Product family the split applies to: covid_mrna, covid_vector, atg, c1_inh, dotatate"
+        tests:
+          - accepted_values:
+              arguments:
+                values: ['covid_mrna', 'covid_vector', 'atg', 'c1_inh', 'dotatate']
+      - name: note
+        description: "Product and reason for the entry"
