@@ -9,3 +9,5 @@
 **Rejected:** querying MotherDuck from the API (cost, latency); a TypeScript/React frontend for the MVP (learning detour; can sit on the same API later).
 
 **Consequences:** MotherDuck is no longer on the serving path. Report-level data still lives as Parquet on R2 (not Postgres). Open: where the prod build runs (local machine then copy, or on the box against R2); decide at Phase B. Postgres/pgvector stays reserved for post-MVP RAG.
+
+**Amended (2026-10-08):** Resolves the Open line. The prod build runs locally into `dbt/pharmawatch_prod.duckdb`; the serving tables are then copied into the DuckDB file on the Hetzner box. MotherDuck is a backup only, reachable as the `motherduck` dbt target, and is not part of the build or serving path.
