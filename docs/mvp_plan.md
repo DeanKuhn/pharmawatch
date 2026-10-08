@@ -14,7 +14,7 @@ open a drug–reaction pair with counts and caveats. Scope: decisions 013, 014.
       → 009 exact-name pick → 006 placeholders → 007 OR → 010 local fallback. Gates off.
 
 ## B — Marts on the new identity
-- [ ] B1 `int_contingency` / `dim_drug` keyed on IN set instead of drugname.
+- [x] B1 `int_contingency` / `dim_drug` keyed on IN set instead of drugname.
 - [ ] B2 MVP prod build (004 as amended). Decide where it runs (014 open item).
 
 ## C — Signals
