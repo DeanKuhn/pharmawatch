@@ -195,6 +195,33 @@ models:
       - name: ror_upper
         description: "Upper bound of 95% CI (log-transformed)"
 
+  - name: mart_pair_quarters
+    description: "Cases per drug-reaction pair per quarter, for the pair-detail time chart and mart_signals' peak quarter. Sparse: quarters with no cases have no row, so charts must fill gaps with 0. Quarters for a pair sum to mart_signals.a."
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns: ['identity_key', 'reaction_pt', 'report_quarter']
+      - dbt_utils.expression_is_true:
+          arguments:
+            expression: "n_cases_nolw <= n_cases"
+    columns:
+      - name: identity_key
+        description: "Drug identity (join to dim_drug for the label)"
+        tests:
+          - not_null
+      - name: reaction_pt
+        description: "MedDRA Preferred Term"
+        tests:
+          - not_null
+      - name: report_quarter
+        description: "First day of the quarter FDA received the case: coalesce(init_fda_dt, fda_dt)"
+        tests:
+          - not_null
+      - name: n_cases
+        description: "Distinct cases for this pair in this quarter"
+      - name: n_cases_nolw
+        description: "n_cases excluding lawyer-reported cases (occp_cod = 'LW')"
+
   - name: mart_signals
     description: "BCPNN information component (IC) with +0.5 shrinkage, ranked by IC025 (decision 013), plus stimulated-reporting caveat columns (C2). One row per int_contingency pair, unfiltered: shrinkage handles small a. _nolw columns recompute the full 2x2 table without lawyer-reported cases (occp_cod = 'LW')."
     tests:
