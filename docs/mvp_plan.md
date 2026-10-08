@@ -15,8 +15,7 @@ open a drug–reaction pair with counts and caveats. Scope: decisions 013, 014.
 
 ## B — Marts on the new identity
 - [x] B1 `int_contingency` / `dim_drug` keyed on IN set instead of drugname.
-- [ ] B2 MVP prod build (004 as amended). Runs locally into `pharmawatch_prod.duckdb` (014 amended
-      2026-10-08). Setup done; run after C.
+- [x] B2 MVP prod build (004 as amended). Runs locally into `pharmawatch_prod.duckdb` (014 amended 2026-10-08).
 
 ## C — Signals
 - [x] C1 Shrunk IC + IC025 model over a/b/c/d (`mart_signals`).
