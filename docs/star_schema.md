@@ -62,6 +62,7 @@ flowchart LR
         prr[mart_prr]
         ror[mart_ror]
         sig[mart_signals]
+        pq[mart_pair_quarters]
     end
 
     demo --> stg_demo
@@ -95,7 +96,8 @@ flowchart LR
     int_cont --> prr
     int_cont --> ror
     int_cont --> sig
-    int_pairs --> sig
+    int_pairs --> pq
+    pq --> sig
     int_demo --> dim_demographics
     int_demo --> fct
     stg_outc --> dim_outcome
@@ -109,4 +111,4 @@ flowchart LR
 4. **Why int models as ephemeral?** Ephemerals do not cost storage or overhead. They act as reusable SQL blocks, perfect for queries that don't need exposure. Exception: models read by more than one downstream model (`int_drug_reaction_pairs`, `int_contingency`, the identity models) are tables, because an ephemeral is recomputed inside every model that uses it.
 5. **Why filter by PS (primary suspect) in the intermediate model?** This is pharmacovigilance convention. PRR and ROR are only used with primary suspect drugs. Including concomitant drugs would inflate denominators and dilute real signal.
 6. **Why source signal marts from intermediates and not fact?** The intermediate models already have the exact grain needed for PRR/ROR calculation without the clutter of dimension keys and outcome flags. `int_contingency` computes a/b/c/d once and all three signal marts read it.
-7. **Why rank by IC025, and why are stimulated-reporting columns caveats rather than filters?** PRR and ROR explode on small counts: a pair with a = 3 and a tiny expected count outranks a pair with a = 962. IC (BCPNN) adds +0.5 shrinkage, so small-count pairs are pulled toward 0, and IC025 (the lower credibility bound) ranks by the evidence rather than the ratio. That is why `mart_signals` is unfiltered while PRR/ROR keep a >= 3. Litigation and media floods (ranitidine 2021) are real reports that inflate counts, so they are flagged, not dropped: `pct_lw` (lawyer-reported share), `peak_quarter_share` (burstiness), and `ic_nolw`/`ic025_nolw`, which recompute the whole 2x2 table without LW cases. `int_contingency` carries both count sets so the counting lives in one model. `int_drug_reaction_pairs` carries `is_lw` and `report_quarter` per case for this.
+7. **Why rank by IC025, and why are stimulated-reporting columns caveats rather than filters?** PRR and ROR explode on small counts: a pair with a = 3 and a tiny expected count outranks a pair with a = 962. IC (BCPNN) adds +0.5 shrinkage, so small-count pairs are pulled toward 0, and IC025 (the lower credibility bound) ranks by the evidence rather than the ratio. That is why `mart_signals` is unfiltered while PRR/ROR keep a >= 3. Litigation and media floods (ranitidine 2021) are real reports that inflate counts, so they are flagged, not dropped: `pct_lw` (lawyer-reported share), `peak_quarter_share` (burstiness), and `ic_nolw`/`ic025_nolw`, which recompute the whole 2x2 table without LW cases. `int_contingency` carries both count sets so the counting lives in one model. `int_drug_reaction_pairs` carries `is_lw` and `report_quarter` per case for this. `mart_pair_quarters` (cases per pair per quarter, LW and non-LW) feeds the pair-detail time chart, and `mart_signals` takes its peak quarter from it; ties go to the earliest quarter so the peak is stable across rebuilds.

@@ -23,33 +23,20 @@ with signals as (
 
 ),
 
-quarter_counts as (
-
-  select
-    identity_key,
-    reaction_pt, 
-    report_quarter,
-    count(distinct primaryid) as q_n
-
-  from {{ ref('int_drug_reaction_pairs') }}
-
-  where identity_key is not null
-
-  group by identity_key, reaction_pt, report_quarter
-
-),
-
 peak as (
 
   select
     identity_key,
     reaction_pt,
-    max(q_n) as peak_quarter_n,
-    arg_max(report_quarter, q_n) as peak_quarter
+    n_cases as peak_quarter_n,
+    report_quarter as peak_quarter
 
-  from quarter_counts
+  from {{ ref('mart_pair_quarters') }}
 
-  group by identity_key, reaction_pt
+  qualify row_number() over(
+    partition by identity_key, reaction_pt
+    order by n_cases desc, report_quarter asc
+  ) = 1
 
 ),
 
