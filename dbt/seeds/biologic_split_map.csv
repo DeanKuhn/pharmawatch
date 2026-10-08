@@ -17,3 +17,5 @@ C1 ESTERASE INHIBITOR (HUMAN),rxcui:809864,rxnorm,PIN,c1_inh,Plasma-derived C1-I
 CONESTAT ALFA,rxcui:1599831,rxnorm,PIN,c1_inh,Recombinant C1-INH (Ruconest)
 LUTETIUM OXODOTREOTIDE LU-177,rxcui:1999335,rxnorm,PIN,dotatate,Lu-177 dotatate therapy (Lutathera)
 DOTATATE GALLIUM GA-68,rxcui:676679,rxnorm,PIN,dotatate,Ga-68 dotatate diagnostic (Netspot)
+PANCRELIPASE,local:PANCRELIPASE,local,,mixture,Lipase/protease/amylase mixture (Creon); RxNav returns 3 INs so 009 marks it ambiguous
+CROTALIDAE POLYVALENT IMMUNE FAB (OVINE),local:CROTALIDAE POLYVALENT IMMUNE FAB (OVINE),local,,mixture,CroFab; RxNav returns 4 antivenin INs so 009 marks it ambiguous
