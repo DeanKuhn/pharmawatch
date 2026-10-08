@@ -35,3 +35,8 @@ open a drug–reaction pair with counts and caveats. Scope: decisions 013, 014.
 ## v1.1 (deferred, see 013)
 008 salt-list refetch + backtests; step-3 measurement pass; gate decisions (012, 006
 token, 009 allergens); 011 detector; EBGM; change-point detection for bursts; RAG.
+
+Build setup: keep a local copy of `pharmawatch_serving.duckdb` as the MVP archive,
+then `mv dbt/pharmawatch_prod.duckdb dbt/pharmawatch_dev.duckdb` (no copy) and build
+v1.1 in dev. Fresh `--target prod` build only at v1.1 release. Leave `dev` as the
+default target. MVP tables needing a fix before then → rebuild prod from `a178340`.
