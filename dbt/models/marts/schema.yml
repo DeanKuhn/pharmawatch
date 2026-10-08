@@ -194,3 +194,58 @@ models:
         description: "Lower bound of 95% CI (log-transformed)"
       - name: ror_upper
         description: "Upper bound of 95% CI (log-transformed)"
+
+  - name: mart_signals
+    description: "BCPNN information component (IC) with +0.5 shrinkage, ranked by IC025 (decision 013), plus stimulated-reporting caveat columns (C2). One row per int_contingency pair, unfiltered: shrinkage handles small a. _nolw columns recompute the full 2x2 table without lawyer-reported cases (occp_cod = 'LW')."
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns: ['identity_key', 'reaction_pt']
+      - dbt_utils.equal_rowcount:
+          arguments:
+            compare_model: ref('int_contingency')
+      - dbt_utils.expression_is_true:
+          arguments:
+            expression: "ic025 <= ic and ic025_nolw <= ic_nolw"
+      - dbt_utils.expression_is_true:
+          arguments:
+            expression: "a_nolw <= a and peak_quarter_n <= a"
+    columns:
+      - name: identity_key
+        description: "Drug identity (join to dim_drug for the label)"
+        tests:
+          - not_null
+      - name: reaction_pt
+        description: "MedDRA Preferred Term"
+        tests:
+          - not_null
+      - name: expected
+        description: "Expected count under independence: (a+b)(a+c)/n"
+      - name: ic
+        description: "log2((a + 0.5) / (expected + 0.5)). > 0 means reported more often than expected."
+        tests:
+          - not_null
+      - name: ic025
+        description: "Lower 95% credibility bound of IC (Norén closed-form approximation). Signal criterion: ic025 > 0. Ranking column."
+        tests:
+          - not_null
+      - name: ic_nolw
+        description: "IC with lawyer-reported cases removed from all four cells and n"
+        tests:
+          - not_null
+      - name: ic025_nolw
+        description: "IC025 with lawyer-reported cases removed. A signal that drops below 0 here is litigation-driven."
+        tests:
+          - not_null
+      - name: pct_lw
+        description: "Share of the pair's a cases that are lawyer-reported, (a - a_nolw) / a"
+        tests:
+          - not_null
+      - name: peak_quarter
+        description: "Quarter (by init_fda_dt, falling back to fda_dt) holding the most of the pair's cases"
+      - name: peak_quarter_n
+        description: "Cases in peak_quarter. Not null proves every pair found its quarter counts."
+        tests:
+          - not_null
+      - name: peak_quarter_share
+        description: "peak_quarter_n / a. Bursty reporting flag; trivially high when a is small, so read it only above a minimum a."
