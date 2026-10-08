@@ -240,6 +240,7 @@ Data quality issues discovered in FAERS/openFDA. Updated as we find them.
 - Such a string has no single RxNorm ingredient set. Tiny in rows (~0.02%), but the interferon rows are real drugs in the mid stratum.
 - Fix: decided 2026-09-29 — split on ` OR ` first, status `ambiguous` with candidate sets kept. See `docs/decisions/007-or-prod-ai-ambiguous.md`.
 - Query: `dbt/analyses/prod_ai_pieces.sql`.
+- Leftovers from the RxNav fetch (2026-10-08, A4): the pieces were fetched before 007, splitting on `\` only, so 90 rxcui files are whole ` OR ` strings (`LIDOCAINE OR MINERAL OIL`) that no piece joins to. The other way round, 16 pieces after the ` OR ` split were never fetched (1,145 piece-rows): candidates like `METHADONE`, `COCAMIDOPROPYL BETAINE`, a flu-strain antigen, plus `ACETAMINOPHEN AND`, `GUAIFENESIN AND`, … (187 each) from the ` AND OR ` string. They fall to the `local:` fallback. No signal impact: their parent `prod_ai` is `ambiguous` either way. Fix: ` AND OR ` → ` OR ` before splitting in `int_piece_ingredients`; no refetch.
 
 ### Vehicle ingredients inside `prod_ai` combos
 
@@ -340,6 +341,7 @@ Data quality issues discovered in FAERS/openFDA. Updated as we find them.
   - **Development codes:** `AZD-1222` (8,494), `CX-024414` (3,613). Both are COVID vaccines (see biologics entry).
   - **Blood products and class-like terms:** `HUMAN RED BLOOD CELL` (6,748), `HUMAN PLATELET, ALLOGENIC` (3,335), `ANTIHEMOPHILIC FACTOR, PEGYLATED (MW 20000) HUMAN SEQUENCE RECOMBINANT` (3,472), `PENICILLIN` (5,767; G or V is unknown, so probably `non_specific`).
 - Fix: pending. Salts → our own salt-strip fallback (strip salt word, retry exact). Non-US drugs → identity fallback needed (planning chat). Codes, blood products → biologic granularity decision.
+- Piece-level view (2026-10-08, `int_piece_ingredients`): 3,368 of 10,478 distinct pieces (32%) have no RxNav match and take the `local:` fallback, but they cover only 490,742 piece-rows (0.62%). The unmatched set is a long tail: a third of the vocabulary, under 1% of the data.
 
 ### Mangled non-ASCII characters in `drugname`
 
