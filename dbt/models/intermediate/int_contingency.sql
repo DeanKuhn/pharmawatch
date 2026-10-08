@@ -3,23 +3,29 @@
 with pair_counts as (
 
 	select
-		drugname,
+		identity_key,
 		reaction_pt,
 		count(distinct primaryid) as a
 	
 	from {{ ref('int_drug_reaction_pairs') }}
-	group by drugname, reaction_pt
+
+  where identity_key is not null
+
+	group by identity_key, reaction_pt
 
 ),
 
 drug_counts as (
 
 	select
-		drugname,
+		identity_key,
 		count(distinct primaryid) as drug_total
 	
 	from {{ ref('int_drug_reaction_pairs') }}
-	group by drugname
+
+  where identity_key is not null
+
+	group by identity_key
 
 ),
 
@@ -45,7 +51,7 @@ total_cases as (
 contingency_table as (
 
 	select
-		p.drugname,
+		p.identity_key,
 		p.reaction_pt,
 		p.a,
 
@@ -59,7 +65,7 @@ contingency_table as (
 		t.n - d.drug_total - r.reaction_total + p.a as d
 
 	from pair_counts p
-	join drug_counts d on p.drugname = d.drugname
+	join drug_counts d on p.identity_key = d.identity_key
 	join reaction_counts r on p.reaction_pt = r.reaction_pt
 	cross join total_cases t
 
