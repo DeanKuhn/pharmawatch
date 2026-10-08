@@ -15,12 +15,13 @@ open a drug–reaction pair with counts and caveats. Scope: decisions 013, 014.
 
 ## B — Marts on the new identity
 - [x] B1 `int_contingency` / `dim_drug` keyed on IN set instead of drugname.
-- [ ] B2 MVP prod build (004 as amended). Decide where it runs (014 open item).
+- [ ] B2 MVP prod build (004 as amended). Runs locally into `pharmawatch_prod.duckdb` (014 amended
+      2026-10-08). Setup done; run after C.
 
 ## C — Signals
-- [ ] C1 Shrunk IC + IC025 model over a/b/c/d.
-- [ ] C2 Stimulated-reporting columns: % LW reporter, peak-quarter share, IC excl. LW.
-      Confirm `occp_cod` survives into staging.
+- [x] C1 Shrunk IC + IC025 model over a/b/c/d (`mart_signals`).
+- [x] C2 Stimulated-reporting columns: % LW reporter, peak-quarter share, IC excl. LW.
+      `occp_cod` confirmed (via `int_case_demographics`). LW = 2.6% of cases, 35% of them ranitidine.
 
 ## D — API (FastAPI, reads DuckDB file on Hetzner)
 - [ ] D1 Copy serving tables into the box's DuckDB file.
