@@ -120,3 +120,48 @@ models:
           - accepted_values:
               arguments:
                 values: ['reported', 'lookup']
+
+  - name: int_piece_ingredients
+    description: "Identity per prod_ai piece (A4). prod_ai_resolved is split on ' OR ' (007) then '\\', upper/trimmed. Rules in precedence order, lowest rule_rank wins: 1 seed map (011), 2 RxNav single IN, 3 exact-name pick among several INs (009), 4 placeholders (006), 6 local fallback (010). 007's ambiguous status is set at prod_ai level downstream, not here. Grain: one row per piece."
+    tests:
+      - dbt_utils.expression_is_true:
+          arguments:
+            expression: "(identity is null) = (status in ('ambiguous', 'non_specific'))"
+    columns:
+      - name: piece
+        description: "Uppercased, trimmed prod_ai piece"
+        tests:
+          - not_null
+          - unique
+      - name: identity
+        description: "Identity element: 'rxcui:<rxcui>' or 'local:<token>'; null for ambiguous and non_specific pieces"
+      - name: identity_source
+        description: "rxnorm | local (010); null when identity is null"
+        tests:
+          - accepted_values:
+              arguments:
+                values: ['rxnorm', 'local']
+      - name: tty
+        description: "IN, or PIN for seeded biologics (001 amendment); null for local and identity-less pieces"
+        tests:
+          - accepted_values:
+              arguments:
+                values: ['IN', 'PIN']
+      - name: status
+        description: "matched (RxNorm or seed), ambiguous (009 found 0 or 2+ exact-name INs), non_specific (006 placeholder), unmatched (local fallback)"
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['matched', 'ambiguous', 'non_specific', 'unmatched']
+      - name: rule
+        description: "Rule that won for this piece"
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['seed', 'rxnav_in', 'name_pick', 'placeholder', 'local']
+      - name: rule_rank
+        description: "Precedence of the winning rule (1 = highest)"
+      - name: n_rows
+        description: "Drug rows whose prod_ai_resolved contains this piece (a combo row counts once per piece)"
