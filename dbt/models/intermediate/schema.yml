@@ -165,3 +165,31 @@ models:
         description: "Precedence of the winning rule (1 = highest)"
       - name: n_rows
         description: "Drug rows whose prod_ai_resolved contains this piece (a combo row counts once per piece)"
+
+  - name: int_prod_ai_identity
+    description: "Drug identity per prod_ai_resolved (B1). Pieces split exactly as in int_piece_ingredients, joined to their identity, rolled back up. Status, first hit wins: ' OR ' in string (007) or any ambiguous piece → ambiguous; any non_specific piece → non_specific; any local-fallback piece → unmatched; else matched. Grain: one row per prod_ai_resolved."
+    tests:
+      - dbt_utils.expression_is_true:
+          arguments:
+            expression: "(identity_key is null) = (status in ('ambiguous', 'non_specific'))"
+    columns:
+      - name: prod_ai_resolved
+        description: "prod_ai string from int_drug_resolved"
+        tests:
+          - not_null
+          - unique
+      - name: n_rows
+        description: "Drug rows carrying this prod_ai_resolved"
+      - name: status
+        description: "matched (no piece fell to 010 fallback; seeded local: identities count as matched), unmatched (at least one local-fallback piece), ambiguous, non_specific"
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['matched', 'unmatched', 'ambiguous', 'non_specific']
+      - name: identity_set
+        description: "Sorted, distinct piece identities; null for ambiguous and non_specific"
+      - name: identity_key
+        description: "identity_set joined with '|'; drug key for int_contingency and dim_drug"
+      - name: n_ingredients
+        description: "Length of identity_set"
