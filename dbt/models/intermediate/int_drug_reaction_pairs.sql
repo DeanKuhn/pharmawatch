@@ -1,21 +1,20 @@
+{{ config(materialized='table') }}
 -- IMPORTANT: separate doses per drug will be merged into one via group by
 
 with drug_reaction_pairs as (
 
 	select
 		d.primaryid,
-		d.drugname,
-		max(d.route) as route,
-		r.reaction_pt
+    i.identity_key,
+    r.reaction_pt
 
-	from {{ ref('stg_drug') }} as d
+  from {{ ref('int_drug_resolved') }} d
+  left join {{ ref('int_prod_ai_identity') }} i using (prod_ai_resolved)
+  inner join {{ ref('stg_reac') }} r on d.primaryid = r.primaryid
 
-	inner join {{ ref('stg_reac') }} as r
-		on d.primaryid = r.primaryid
+  where d.role_cod = 'PS'
 
-	where d.role_cod = 'PS'
-
-	group by d.primaryid, d.drugname, r.reaction_pt
+  group by d.primaryid, i.identity_key, r.reaction_pt 
 
 )
 
