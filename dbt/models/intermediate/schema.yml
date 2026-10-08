@@ -2,16 +2,18 @@ version: 2
 
 models:
   - name: int_drug_reaction_pairs
-    description: "Each unique (case, drug, reaction) triple for primary suspect drugs only. Grain: one row per primaryid + drugname + reaction_pt. Multiple doses of the same drug within a case are collapsed."
+    description: "Each unique (case, drug identity, reaction) triple for primary suspect drugs only. Grain: one row per primaryid + identity_key + reaction_pt. Multiple doses, and PS rows whose prod_ai strings resolve to the same identity, are collapsed. Rows with null identity_key (no prod_ai_resolved, ambiguous, non_specific) are kept for background totals."
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns: ['primaryid', 'identity_key', 'reaction_pt']
     columns:
       - name: primaryid
         description: "Case identifier"
         tests:
           - not_null
-      - name: drugname
-        description: "Drug name as reported"
-      - name: route
-        description: "Route of administration (max selected when multiple doses exist)"
+      - name: identity_key
+        description: "Drug identity from int_prod_ai_identity; null when the PS drug has no identity"
       - name: reaction_pt
         description: "MedDRA Preferred Term for the adverse reaction"
 
@@ -44,14 +46,14 @@ models:
       - name: occp_cod
         description: "Reporter occupation code (MD, PH, CN, etc.)"
   - name: int_contingency
-    description: "2x2 contingency table per drug-reaction pair, shared by mart_prr and mart_ror. Counts are distinct cases (primaryid) from int_drug_reaction_pairs. Grain: one row per drugname + reaction_pt. Unfiltered — marts apply their own thresholds."
+    description: "2x2 contingency table per drug-reaction pair, shared by mart_prr and mart_ror. Counts are distinct cases (primaryid) from int_drug_reaction_pairs. Grain: one row per identity_key + reaction_pt. a and b count only keyed rows; c, d and N include null-identity cases (background). Unfiltered — marts apply their own thresholds."
     tests:
       - dbt_utils.unique_combination_of_columns:
           arguments:
-            combination_of_columns: ['drugname', 'reaction_pt']
+            combination_of_columns: ['identity_key', 'reaction_pt']
     columns:
-      - name: drugname
-        description: "Drug name as reported"
+      - name: identity_key
+        description: "Drug identity from int_prod_ai_identity"
       - name: reaction_pt
         description: "MedDRA Preferred Term"
       - name: a

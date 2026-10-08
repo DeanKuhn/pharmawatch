@@ -79,7 +79,6 @@ final as (
     prod_ai_resolved,
     n as n_rows,
     status,
-
     case when status in ('matched', 'unmatched') then raw_set end as identity_set,
     array_to_string(identity_set, '|') as identity_key,
     len(identity_set) as n_ingredients
