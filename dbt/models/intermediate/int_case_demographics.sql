@@ -14,7 +14,9 @@ with age_normalized as (
 		sex,
 		reporter_country,
 		event_dt,
-		occp_cod
+		occp_cod,
+    init_fda_dt,
+    fda_dt
 
 	from {{ ref('stg_demo') }}
 
@@ -25,6 +27,8 @@ case_demographics as (
 	select
 		primaryid,
 		age_years,
+    init_fda_dt,
+    fda_dt,
 
 		case
 			when age_years < 0 or age_years > 120 then 'Unknown'
