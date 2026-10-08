@@ -76,3 +76,30 @@ sources:
             description: "Case identifier"
           - name: rpsr_cod
             description: "Report source code"
+
+  - name: rxnav
+    description: "RxNav REST responses stored as JSON, one file per request (read-only). RxNorm version 08-Sep-2026."
+    meta:
+      external_location: "read_json('../data/json/rxnav/{name}/*.json', union_by_name = true)"
+    tables:
+      - name: rxcui
+        description: "rxcui.json?name=<piece>&search=2 — one file per prod_ai piece."
+        columns:
+          - name: piece
+            description: "Uppercased, trimmed prod_ai piece sent as the name lookup"
+          - name: response
+            description: "idGroup.rxnormId[] holds the matched rxcuis; absent when nothing matched"
+      - name: properties
+        description: "rxcui/<rxcui>/properties.json — one file per rxcui returned by the rxcui lookup."
+        columns:
+          - name: rxcui
+            description: "RxNorm concept id requested"
+          - name: response
+            description: "properties.{rxcui, name, tty, ...}"
+      - name: related
+        description: "rxcui/<rxcui>/related.json?tty=IN — one file per rxcui returned by the rxcui lookup."
+        columns:
+          - name: rxcui
+            description: "RxNorm concept id requested"
+          - name: response
+            description: "relatedGroup.conceptGroup[].conceptProperties[] holds the related INs"
