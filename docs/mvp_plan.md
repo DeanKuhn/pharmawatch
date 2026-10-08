@@ -10,7 +10,7 @@ open a drug–reaction pair with counts and caveats. Scope: decisions 013, 014.
       to a model (002).
 - [x] A3 Seed map for 011 biologics/dev codes (Moderna, Pfizer, AZD-1222, ATG species,
       Lu-177 dotatate, C1-INH); confirm exact piece strings from data.
-- [ ] A4 `int_piece_ingredients` from pass-1/2 JSON. Precedence: seed map → RxNav IN set
+- [x] A4 `int_piece_ingredients` from pass-1/2 JSON. Precedence: seed map → RxNav IN set
       → 009 exact-name pick → 006 placeholders → 007 OR → 010 local fallback. Gates off.
 
 ## B — Marts on the new identity
