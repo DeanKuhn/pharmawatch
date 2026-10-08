@@ -16,6 +16,14 @@ models:
         description: "Drug identity from int_prod_ai_identity; null when the PS drug has no identity"
       - name: reaction_pt
         description: "MedDRA Preferred Term for the adverse reaction"
+      - name: is_lw
+        description: "Case filed by a lawyer (occp_cod = 'LW'); null occp_cod counts as false"
+        tests:
+          - not_null
+      - name: report_quarter
+        description: "First day of the quarter FDA received the case: coalesce(init_fda_dt, fda_dt). init_fda_dt is null for the whole legacy era (see mess_log), so those cases use fda_dt."
+        tests:
+          - not_null
 
   - name: int_case_demographics
     description: "Case demographics with normalized age (converted to years) and bucketed age groups. One row per case."
@@ -44,9 +52,13 @@ models:
       - name: event_dt
         description: "Date the adverse event occurred"
       - name: occp_cod
-        description: "Reporter occupation code (MD, PH, CN, etc.)"
+        description: "Reporter occupation code (MD, PH, CN, LW, etc.)"
+      - name: init_fda_dt
+        description: "Date FDA first received the case. Null for all legacy-era (pre-2012q4) cases."
+      - name: fda_dt
+        description: "Date FDA received this (latest) version of the case"
   - name: int_contingency
-    description: "2x2 contingency table per drug-reaction pair, shared by mart_prr and mart_ror. Counts are distinct cases (primaryid) from int_drug_reaction_pairs. Grain: one row per identity_key + reaction_pt. a and b count only keyed rows; c, d and N include null-identity cases (background). Unfiltered — marts apply their own thresholds."
+    description: "2x2 contingency table per drug-reaction pair, shared by mart_prr, mart_ror and mart_signals. Counts are distinct cases (primaryid) from int_drug_reaction_pairs. Grain: one row per identity_key + reaction_pt. a and b count only keyed rows; c, d and N include null-identity cases (background). Unfiltered — marts apply their own thresholds. The _nolw columns are the same table recomputed without lawyer-reported cases (is_lw), for mart_signals' stimulated-reporting check; they sum to n_nolw = N minus LW cases."
     tests:
       - dbt_utils.unique_combination_of_columns:
           arguments:
@@ -64,6 +76,14 @@ models:
         description: "Cases reporting this reaction but not this drug"
       - name: d
         description: "Cases reporting neither this drug nor this reaction"
+      - name: a_nolw
+        description: "a excluding lawyer-reported cases; 0 when every case for the pair is LW"
+      - name: b_nolw
+        description: "b excluding lawyer-reported cases"
+      - name: c_nolw
+        description: "c excluding lawyer-reported cases"
+      - name: d_nolw
+        description: "d excluding lawyer-reported cases"
 
   - name: int_drugname_lookup
     description: "Cleaned drugname → modal prod_ai, built from stg_drug rows with prod_ai filled (all roles). Grain: one row per drugname_clean. All bands kept; which bands fill prod_ai is decided downstream (decision 002)."
