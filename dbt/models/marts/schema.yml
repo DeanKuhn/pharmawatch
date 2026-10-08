@@ -2,18 +2,31 @@ version: 2
 
 models:
   - name: dim_drug
-    description: "Drug dimension. One row per unique drug name sourced from primary suspect drugs."
+    description: "Drug dimension. One row per identity_key from int_prod_ai_identity (matched and unmatched only)."
     columns:
       - name: drug_key
-        description: "Surrogate key (hash of drugname)"
+        description: "Surrogate key (hash of identity_key)"
         tests:
           - unique
           - not_null
-      - name: drugname
-        description: "Drug name as reported in FAERS"
+      - name: identity_key
+        description: "Sorted, '|'-joined ingredient identities"
         tests:
           - not_null
           - unique
+      - name: drug_label
+        description: "Display name: the prod_ai_resolved string with the most drug rows for this identity"
+        tests:
+          - not_null
+      - name: status
+        description: "unmatched if any contributing string has a local-fallback piece, else matched"
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['matched', 'unmatched']
+      - name: n_ingredients
+        description: "Number of ingredient identities in the set"
 
   - name: dim_reaction
     description: "Reaction dimension. One row per unique MedDRA Preferred Term."
@@ -64,16 +77,15 @@ models:
         description: "Two-letter country code of the reporter"
 
   - name: fct_adverse_events
-    description: "Fact table. Grain: one row per (case, drug, reaction) triple for primary suspect drugs. Surrogate FKs to all dimensions, outcome boolean flags pre-aggregated to avoid grain multiplication, plus degenerate dimensions (drugname, reaction_pt, route)."
+    description: "Fact table. Grain: one row per (case, drug, reaction) triple for primary suspect drugs. Surrogate FKs to all dimensions, outcome boolean flags pre-aggregated to avoid grain multiplication, plus degenerate dimensions (identity_key, reaction_pt). drug_key and identity_key are null for PS drugs with no identity."
     columns:
       - name: primaryid
         description: "Case identifier"
         tests:
           - not_null
       - name: drug_key
-        description: "FK to dim_drug"
+        description: "FK to dim_drug; null when the PS drug has no identity"
         tests:
-          - not_null
           - relationships:
               arguments:
                 to: ref('dim_drug')
@@ -94,12 +106,10 @@ models:
               arguments:
                 to: ref('dim_demographics')
                 field: demographics_key
-      - name: drugname
-        description: "Degenerate dimension: drug name as reported"
+      - name: identity_key
+        description: "Degenerate dimension: drug identity"
       - name: reaction_pt
         description: "Degenerate dimension: MedDRA Preferred Term"
-      - name: route
-        description: "Degenerate dimension: route of administration"
       - name: event_dt
         description: "Date the adverse event occurred"
       - name: has_death
@@ -120,8 +130,8 @@ models:
   - name: mart_prr
     description: "Proportional Reporting Ratio (PRR) signal detection. One row per drug-reaction pair with a >= 3 cases. Uses 2x2 contingency table with log-transformed 95% confidence intervals."
     columns:
-      - name: drugname
-        description: "Drug name"
+      - name: identity_key
+        description: "Drug identity (join to dim_drug for the label)"
         tests:
           - not_null
       - name: reaction_pt
@@ -158,8 +168,8 @@ models:
   - name: mart_ror
     description: "Reporting Odds Ratio (ROR) signal detection. One row per drug-reaction pair with a >= 3 cases. Uses 2x2 contingency table with log-transformed 95% confidence intervals."
     columns:
-      - name: drugname
-        description: "Drug name"
+      - name: identity_key
+        description: "Drug identity (join to dim_drug for the label)"
         tests:
           - not_null
       - name: reaction_pt

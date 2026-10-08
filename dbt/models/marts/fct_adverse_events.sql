@@ -29,16 +29,16 @@ fct_adverse_events as (
 
 	select
 		dr.primaryid,
-		{{ dbt_utils.generate_surrogate_key(['dr.drugname']) }} 
-			as drug_key,
+		case when dr.identity_key is not null then 
+      {{ dbt_utils.generate_surrogate_key(['dr.identity_key']) }} 
+      end as drug_key,
 		{{ dbt_utils.generate_surrogate_key(['dr.reaction_pt']) }} 
 			as reaction_key,
 		{{ dbt_utils.generate_surrogate_key([
 			'de.age_group', 'de.sex', 'de.reporter_country'
 		]) }} as demographics_key,
-		dr.drugname,
+		dr.identity_key,
 		dr.reaction_pt,
-		dr.route,
 		de.event_dt,
 		coalesce(oc.has_death, 0) as has_death,
 		coalesce(oc.has_hospitalization, 0) as has_hospitalization,
