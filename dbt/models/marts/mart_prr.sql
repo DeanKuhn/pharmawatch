@@ -1,7 +1,7 @@
 with prr as (
 
 	select
-		drugname,
+		identity_key,
 		reaction_pt,
 		a, b, c, d,
 
