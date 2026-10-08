@@ -70,6 +70,12 @@ Data quality issues discovered in FAERS/openFDA. Updated as we find them.
 - `19000101` (14 rows), `00010101` (9); parsed `event_dt` ranges from `0001-01-01` to `9199-02-01`.
 - ~450 full dates fall outside 1950–2026. Filter or flag before any timeline analysis.
 
+### `init_fda_dt` is null for the whole legacy era
+
+- 3,000,931 `stg_demo` rows (14.6% of cases) have null `init_fda_dt`; every one has `fda_dt`, ranging 2003-10-06 to 2012-08-27 (0 after 2012q4). Legacy AERS files had no initial-receipt date.
+- Example: primaryid `4848835`, `init_fda_dt` NULL, `fda_dt` 2005-11-15.
+- Fix (2026-10-08, `int_drug_reaction_pairs.report_quarter`): `coalesce(init_fda_dt, fda_dt)`. For legacy cases that is the latest version's date, not first receipt, so a legacy case amended later lands in a later quarter.
+
 ### Junk in numeric fields
 
 - `age`: 12 of 12.1M fail cast — `U`, `163/6`, `N/A`.
@@ -82,6 +88,7 @@ Data quality issues discovered in FAERS/openFDA. Updated as we find them.
 
 - `ZANTAC`: #5 PS drugname (266k rows); 88% filed 2021–2022 vs 1.7k in 2019. Matches the 2020 ranitidine recall and litigation.
   - In `prod_ai` pieces (all roles, 2026-09-28), ranitidine is the #1 ingredient: `RANITIDINE HYDROCHLORIDE` 1,176,437 + `RANITIDINE` 651,188 drug rows. Unchecked: share of reports with reporter occupation `occp_cod = 'LW'` (lawyer) in demo.
+  - Checked 2026-10-08: 540,154 of 20.58M cases (2.6%) are `LW`; ranitidine (`rxcui:9143`) holds 34.9% of them, oxycodone 12.8%. LW is 11.1% of 2021 cases. Ranitidine + PROSTATE CANCER: a = 60,356, of which 30,915 are non-LW, so the LW flag catches only part of the surge.
   - Coded drugnames: `RANITIDINE HYDROCHLORIDE (852)` (22,107 rows) and `RANITIDINE HYDROCHLORIDE (156)` (15,129), each a single exact drugname. Looks like bulk submissions with a batch or firm code. Test case for the C2 lawyer flag.
 - `PROACTIV MD ADAPALENE ACNE TREATMENT`: #6 (175k rows) for an OTC acne product, concentrated 2018–2021. Cause unverified.
 - Signals for these reflect reporting pressure, not just pharmacology. Flag rather than rank.

@@ -1,6 +1,6 @@
 # Star Schema dbt Docs
 
-This star schema has a fact table (cases with drug + reaction pairs), dimension tables for drug, reaction, outcome(s), and demographics. Additionally, PRR and ROR tables are calculated off of these drug-reaction pairs.
+This star schema has a fact table (cases with drug + reaction pairs), dimension tables for drug, reaction, outcome(s), and demographics. Additionally, PRR, ROR and IC (`mart_signals`) tables are calculated off of these drug-reaction pairs.
 
 ## Mermaid ER
 ```mermaid
@@ -11,6 +11,7 @@ erDiagram
     dim_outcome }o--o| fct_adverse_events : "boolean flags"
     fct_adverse_events ||--|| mart_prr : "drug-reaction pairs"
     fct_adverse_events ||--|| mart_ror : "drug-reaction pairs"
+    fct_adverse_events ||--|| mart_signals : "drug-reaction pairs"
 ```
 
 ## Mermaid DAG
@@ -60,6 +61,7 @@ flowchart LR
         fct[fct_adverse_events]
         prr[mart_prr]
         ror[mart_ror]
+        sig[mart_signals]
     end
 
     demo --> stg_demo
@@ -83,6 +85,7 @@ flowchart LR
     int_resolved --> int_pairs
     int_identity --> int_pairs
     stg_reac --> int_pairs
+    int_demo --> int_pairs
     stg_demo --> int_demo
 
     int_identity --> dim_drug
@@ -91,6 +94,8 @@ flowchart LR
     int_pairs --> int_cont
     int_cont --> prr
     int_cont --> ror
+    int_cont --> sig
+    int_pairs --> sig
     int_demo --> dim_demographics
     int_demo --> fct
     stg_outc --> dim_outcome
@@ -103,4 +108,5 @@ flowchart LR
 3. **Why dim_drug keyed on identity_key instead of drugname?** A drugname is a spelling, not a drug: Vicodin, Norco and "HYDROCODONE/ACETAMINOPHEN" were 390 separate drugnames splitting one drug's cases. identity_key is the sorted set of RxNorm ingredient identities for a prod_ai string (`int_prod_ai_identity`), so brands, generics, salt forms and ingredient order collapse to one drug (139,460 PS drugnames → 11,954 drugs). The label shown is the most-reported prod_ai string for that key. PS rows with no identity (no prod_ai, ambiguous `OR` strings, non-specific placeholders; ~2%) stay in the PRR/ROR background (c, d, N) but get no drug_key. Route is not part of the key or the fact table: it is messy (null, or "orally", "swallowed", "mouth" for the same thing) and nothing in the MVP uses it.
 4. **Why int models as ephemeral?** Ephemerals do not cost storage or overhead. They act as reusable SQL blocks, perfect for queries that don't need exposure. Exception: models read by more than one downstream model (`int_drug_reaction_pairs`, `int_contingency`, the identity models) are tables, because an ephemeral is recomputed inside every model that uses it.
 5. **Why filter by PS (primary suspect) in the intermediate model?** This is pharmacovigilance convention. PRR and ROR are only used with primary suspect drugs. Including concomitant drugs would inflate denominators and dilute real signal.
-6. **Why source signal marts from intermediates and not fact?** The intermediate models already have the exact grain needed for PRR/ROR calculation without the clutter of dimension keys and outcome flags. `int_contingency` computes a/b/c/d once and both marts read it.
+6. **Why source signal marts from intermediates and not fact?** The intermediate models already have the exact grain needed for PRR/ROR calculation without the clutter of dimension keys and outcome flags. `int_contingency` computes a/b/c/d once and all three signal marts read it.
+7. **Why rank by IC025, and why are stimulated-reporting columns caveats rather than filters?** PRR and ROR explode on small counts: a pair with a = 3 and a tiny expected count outranks a pair with a = 962. IC (BCPNN) adds +0.5 shrinkage, so small-count pairs are pulled toward 0, and IC025 (the lower credibility bound) ranks by the evidence rather than the ratio. That is why `mart_signals` is unfiltered while PRR/ROR keep a >= 3. Litigation and media floods (ranitidine 2021) are real reports that inflate counts, so they are flagged, not dropped: `pct_lw` (lawyer-reported share), `peak_quarter_share` (burstiness), and `ic_nolw`/`ic025_nolw`, which recompute the whole 2x2 table without LW cases. `int_contingency` carries both count sets so the counting lives in one model. `int_drug_reaction_pairs` carries `is_lw` and `report_quarter` per case for this.
