@@ -157,3 +157,64 @@ models:
         description: "Duration of therapy (raw numeric)"
       - name: dur_cod
         description: "Unit of therapy duration (YR, MON, WK, DY, HR)"
+
+  - name: stg_rxnav_rxcui
+    description: "RxNav name lookup per prod_ai piece. One row per (piece, rxcui); no-match pieces kept with null rxcui."
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns: [piece, rxcui]
+    columns:
+      - name: piece
+        description: "Uppercased, trimmed prod_ai piece"
+        data_tests:
+          - not_null
+      - name: rxnorm_version
+        description: "RxNorm release the response came from"
+      - name: rxcui
+        description: "Matched RxNorm concept id (varchar); null when RxNav found no match"
+        data_tests:
+          - relationships:
+              to: ref('stg_rxnav_properties')
+              field: rxcui
+          - relationships:
+              to: ref('stg_rxnav_related')
+              field: rxcui
+
+  - name: stg_rxnav_properties
+    description: "RxNorm concept properties. One row per rxcui."
+    columns:
+      - name: rxcui
+        description: "RxNorm concept id (varchar)"
+        data_tests:
+          - not_null
+          - unique
+      - name: rxcui_name
+        description: "RxNorm concept name"
+        data_tests:
+          - not_null
+      - name: tty
+        description: "RxNorm term type (IN, PIN, MIN, BN, ...)"
+        data_tests:
+          - not_null
+
+  - name: stg_rxnav_related
+    description: "Ingredient (IN) rollup per rxcui. One row per (rxcui, in_rxcui); multi-ingredient concepts have several rows."
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns: [rxcui, in_rxcui]
+    columns:
+      - name: rxcui
+        description: "Source RxNorm concept id (varchar)"
+        data_tests:
+          - not_null
+      - name: in_rxcui
+        description: "Related ingredient's rxcui"
+        data_tests:
+          - not_null
+      - name: in_name
+        description: "Related ingredient's name"
+      - name: in_tty
+        description: "Term type of the related concept; always IN given the tty=IN request"
+        data_tests:
+          - accepted_values:
+              values: ['IN']
