@@ -38,6 +38,6 @@ seeds:
         tests:
           - accepted_values:
               arguments:
-                values: ['covid_mrna', 'covid_vector', 'atg', 'c1_inh', 'dotatate']
+                values: ['covid_mrna', 'covid_vector', 'atg', 'c1_inh', 'dotatate', 'mixture']
       - name: note
         description: "Product and reason for the entry"
