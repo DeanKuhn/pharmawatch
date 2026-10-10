@@ -11,6 +11,7 @@ dbt/target/
 dbt/target_dev
 dbt/.user.yml
 dbt/profiles.yml
+*duckdb.tmp/
 
 .env
 .tmp
