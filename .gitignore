@@ -11,7 +11,8 @@ dbt/target/
 dbt/target_dev
 dbt/.user.yml
 dbt/profiles.yml
-*duckdb.tmp
+*.duckdb.tmp
+*.duckdb.tmp.wal
 
 .env
 .tmp
