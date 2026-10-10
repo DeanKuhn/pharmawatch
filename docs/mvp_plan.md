@@ -27,7 +27,7 @@ open a drug–reaction pair with counts and caveats. Scope: decisions 013, 014.
 - [x] D2 Endpoints: drug search; ranked signals for a drug; pair detail.
 
 ## E — Frontend (Jinja templates)
-- [ ] E1 Search page → signal table → pair detail with FAERS caveats, hide peak_quarter_share when a < 10.
+- [x] E1 Search page → signal table → pair detail with FAERS caveats, hide peak_quarter_share when a < 10.
 
 ## F — Deploy
 - [ ] F1 Hetzner, pharma.deanslist.dev.
