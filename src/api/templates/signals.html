@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+
+{% block title %}{{ drug_label }} · PharmaWatch{% endblock %}
+
+{% block content %}
+<h1>{{ drug_label }}</h1>
+<p>Top reactions reported disproportionately often with this drug, ranked by IC025.
+  IC025 &gt; 0 means reported more often than expected, even at the cautious lower bound.</p>
+
+<table>
+  <thead>
+    <tr>
+      <th>Reaction</th>
+      <th>Cases</th>
+      <th>Expected</th>
+      <th>IC025</th>
+      <th>Lawyer-reported</th>
+      <th>Peak quarter</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for s in signals %}
+    <tr>
+      <td><a href="/drugs/{{ drug_key }}/signals/{{ s.reaction_pt | urlencode }}">{{ s.reaction_pt }}</a></td>
+      <td>{{ s.a }}</td>
+      <td>{{ s.expected | round(1) }}</td>
+      <td>{{ s.ic025 | round(2) }}</td>
+      <td>{{ (s.pct_lw * 100) | round | int }}%</td>
+      <td>
+        {% if s.a >= 10 %}{{ s.peak_quarter }} ({{ (s.peak_quarter_share * 100) | round | int }}%){% endif %}
+      </td>
+    </tr>
+    {% else %}
+    <tr>
+      <td colspan="6">No signals for this drug.</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

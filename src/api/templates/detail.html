@@ -1,0 +1,85 @@
+{% extends "base.html" %}
+
+{% block title %}{{ s.reaction_pt }} &middot; {{ drug_label }} &middot; PharmaWatch{% endblock %}
+
+{% block content %}
+<p><a href="/drugs/{{ drug_key }}">← all signals for {{ drug_label }}</a></p>
+<h1>{{ drug_label }} → {{ s.reaction_pt }}</h1>
+
+<table class="stats">
+  <tr>
+    <th>Cases reportign both</th>
+    <td>{{ s.a }}</td>
+  </tr>
+  <tr>
+    <th>Expected if unrelated</th>
+    <td>{{ s.expected | round(1) }}</td>
+  </tr>
+  <tr>
+    <th>IC (lower bound IC025)</th>
+    <td>{{ s.ic | round(2) }} ({{ s.ic025 | round(2) }})</td>
+  </tr>
+  <tr>
+    <th>IC025 excluding lawyer reports</th>
+    <td>{{ s.ic025_nolw | round(2) }}</td>
+  </tr>
+  <tr>
+    <th>Lawyer-reported</th>
+    <td>{{ (s.pct_lw * 100) | round | int }}%</td>
+  </tr>
+  {% if s.a >= 10 %}
+  <tr>
+    <th>Peak quarter</th>
+    <td>{{ s.peak_quarter }}, {{ (s.peak_quarter_share * 100) | round | int }}% of cases</td>
+  </tr>
+  {% endif %}
+</table>
+
+<h2>Cases per quarter</h2>
+<p>
+  <span class="swatch nolw"></span> Other reporters &nbsp;
+  <span class="swatch lw"></span> Lawyer-reported
+</p>
+<div class="chart">
+  {% for q in quarters %}
+  <div class="slot" title="{{ q.label }}: {{ q.n }} cases ({{ q.n_lw }} lawyer-reported)">
+    <div class="col" style="height: {{ 100 * q.n / max_n }}%">
+      {% if q.n_lw %}<div class="lw" style="flex-grow: {{ q.n_lw }}"></div>{% endif %}
+      {% if q.n_nolw %}<div class="nolw" style="flex-grow: {{ q.n_nolw }}"></div>{% endif %}
+    </div>
+  </div>
+  {% endfor %}
+</div>
+<div class="axis"><span>{{ quarters[0].label }}</span><span>{{ quarters[-1].label }}</span></div>
+{% if n_pre_2004 %}
+<p class="note">{{ n_pre_2004 }} cases dated before 2004 are not shown.</p>
+{% endif %}
+
+<details>
+  <summary>Show as table</summary>
+  <table>
+    <tr>
+      <th>Quarter</th>
+      <th>Cases</th>
+      <th>Lawyer-reported</th>
+    </tr>
+    {% for q in quarters if q.n %}
+    <tr>
+      <td>{{ q.label }}</td>
+      <td>{{ q.n }}</td>
+      <td>{{ q.n_lw }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+</details>
+
+<h2>Before drawing conclusions</h2>
+<ul>
+  <li>FAERS reports are voluntary and unverified. A report does not show the drug caused the reaction.</li>
+  <li>There is no denominator: FAERS doesn't know how many people took the drug, so these are not rates or risks.</li>
+  <li>IC compares this pair with all other drugs in FAERS. A high IC means "reported unusually often", not "dangerous".</li>
+  <li>News, recalls and lawsuits drive bursts of reports. Check the lawyer share and the peak quarter.</li>
+  <li>The reaction may come from the condition being treated rather than the drug.</li>
+  <li>Duplicate reports are reduced but not eliminated. Drug names are matched from free text.</li>
+</ul>
+{% endblock %}
