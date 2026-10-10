@@ -24,10 +24,10 @@ open a drug–reaction pair with counts and caveats. Scope: decisions 013, 014.
 
 ## D — API (FastAPI, reads DuckDB file on Hetzner)
 - [x] D1 Copy serving tables into the box's DuckDB file.
-- [ ] D2 Endpoints: drug search; ranked signals for a drug; pair detail.
+- [x] D2 Endpoints: drug search; ranked signals for a drug; pair detail.
 
 ## E — Frontend (Jinja templates)
-- [ ] E1 Search page → signal table → pair detail with FAERS caveats.
+- [ ] E1 Search page → signal table → pair detail with FAERS caveats, hide peak_quarter_share when a < 10.
 
 ## F — Deploy
 - [ ] F1 Hetzner, pharma.deanslist.dev.
