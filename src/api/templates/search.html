@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+
+{% block content %}
+<h1>Search drugs</h1>
+
+<form method="get" action="/">
+  <input type="search" name="q" value="{{ q or '' }}" placeholder="e.g. ranitidine" autofocus>
+  <button type="submit">Search</button>
+</form>
+
+{% if drugs %}
+<ul>
+  {% for d in drugs %}
+  <li>
+    <a href="/drugs/{{ d.drug_key }}">{{ d.drug_label }}</a>
+    {% if d.n_ingredients > 1 %}<small>(combination, {{ d.n_ingredients }} ingredients)</small>{% endif %}
+  </li>
+  {% endfor %}
+</ul>
+{% elif q %}
+<p>No drugs match "{{ q }}".</p>
+{% endif %}
+{% endblock %}

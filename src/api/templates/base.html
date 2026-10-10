@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}PharmaWatch{% endblock %}</title>
+  <style>
+    body {
+      font-family: system-ui, sans-serif;
+      max-width: 960px;
+      margin: 0 auto;
+      padding: 1rem;
+    }
+
+    table {
+      border-collapse: collapse;
+      width: 100%;
+    }
+
+    th, td {
+      text-align: left;
+      padding: 0.3rem 0.6rem;
+      border-bottom: 1px solid #ddd;
+    }
+
+    .stats th { width: 16rem; font-weight: normal; color: #555; }
+
+    .chart { 
+      display: flex; height: 200px; gap: 1px; border-bottom: 1px solid #999; 
+    }
+
+    .slot  { 
+      flex: 1; min-width: 0; height: 100%; display: flex; align-items: flex-end; 
+    }
+
+    .slot:hover { background: #f0f0ee; }
+
+    .col   { 
+      width: 100%; display: flex; flex-direction: column; 
+      gap: 2px; border-radius: 2px 2px 0 0; overflow: hidden; 
+    }
+
+    .lw    { background: #eb6834; }
+
+    .nolw  { background: #2a78d6; }
+
+    .swatch { 
+      display: inline-block; width: 0.8em; 
+      height: 0.8em; border-radius: 2px; 
+      vertical-align: middle; 
+    }
+
+    .axis, .note { 
+      display: flex; justify-content: space-between; font-size: 0.85rem; color: #555; 
+    }
+  </style>
+</head>
+
+<body>
+  <nav><a href="/">PharmaWatch</a></nav>
+  <main>
+    {% block content %}{% endblock %}
+  </main>
+</body>
+
+</html>
