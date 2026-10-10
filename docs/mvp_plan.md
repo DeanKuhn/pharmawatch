@@ -23,7 +23,7 @@ open a drug–reaction pair with counts and caveats. Scope: decisions 013, 014.
       `occp_cod` confirmed (via `int_case_demographics`). LW = 2.6% of cases, 35% of them ranitidine.
 
 ## D — API (FastAPI, reads DuckDB file on Hetzner)
-- [ ] D1 Copy serving tables into the box's DuckDB file.
+- [x] D1 Copy serving tables into the box's DuckDB file.
 - [ ] D2 Endpoints: drug search; ranked signals for a drug; pair detail.
 
 ## E — Frontend (Jinja templates)
