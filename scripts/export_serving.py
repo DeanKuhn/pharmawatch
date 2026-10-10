@@ -28,6 +28,7 @@ TABLES = {
     "mart_pair_quarters": "identity_key, reaction_pt, report_quarter",
 }
 
+
 def export() -> None:
     OUT_TMP.unlink(missing_ok=True)
     OUT_TMP_WAL.unlink(missing_ok=True)
@@ -42,13 +43,14 @@ def export() -> None:
             sc = con.execute(f"select count(*) from {t}").fetchone()
             pc = con.execute(f"select count(*) from prod.main.{t}").fetchone()
             if sc != pc:
-                raise ValueError(f"{t}: serving {sc[0]} != prod {pc[0]}") # type:ignore
+                raise ValueError(f"{t}: serving {sc[0]} != prod {pc[0]}")  # type:ignore
 
             log.info(f"Created {t}")
-            log.info(f"Serving count: {sc[0]} | Prod count: {pc[0]}") # type:ignore
+            log.info(f"Serving count: {sc[0]} | Prod count: {pc[0]}")  # type:ignore
 
     OUT_TMP.rename(OUT)
     log.info(f"Complete, file size: {OUT.stat().st_size / 1e9:.2f}GB")
+
 
 if __name__ == "__main__":
     export()
