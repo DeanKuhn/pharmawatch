@@ -366,3 +366,13 @@ Data quality issues discovered in FAERS/openFDA. Updated as we find them.
 ### Watch: FDA rebranding FAERS to AEMS
 
 - FDA consolidating FAERS into "Adverse Event Monitoring System" (AEMS). Download page URL may go stale. Quarterly extract files themselves unaffected as of 2026-07. Re-check URL in `download.py` if fetches fail.
+
+### Report quarters before FAERS starts (2004)
+
+- `report_quarter` = quarter of `coalesce(init_fda_dt, fda_dt)` (`int_drug_reaction_pairs`). Earliest is 1986-10, though the extracts start at 2004 Q1 (2026-10-10, serving file):
+  - `SALSALATE` (`rxcui:36108`) → OEDEMA PERIPHERAL and PARAESTHESIA, 1 case each in 1986-10.
+  - 2,310 of 16.1M `mart_pair_quarters` rows (0.014%), 2,419 of 59.9M pair-cases (0.004%), 2,066 pairs. Mostly 2000–2003 (2003: 1,155 cases); a handful scattered back to 1986.
+  - 510 `mart_signals` rows have `peak_quarter` before 2004.
+- Probably genuine initial receipt dates of legacy reports whose follow-ups landed in 2004+ extracts, not garbage. Not verified against raw `init_fda_dt`.
+- No signal impact: cases are real and already in `a`; share is negligible.
+- Fix: display only (E1). Chart axis starts at 2004 Q1; earlier quarters dropped from the chart, optionally footnoted "N cases before 2004 not shown". Data unchanged.
