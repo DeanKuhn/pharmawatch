@@ -37,4 +37,71 @@
     <span class="stat-sub">from a 10.9 GB warehouse</span>
   </div>
 </div>
+
+<h2>Pipeline</h2>
+<p class="muted">
+  Each stage with real row counts. Units change along the way (reports, cases, drug rows,
+  pairs), so the bars track only the dedup drop: distinct cases as a share of raw reports.
+</p>
+
+<ol class="pipeline">
+  <li class="stage">
+    <div class="stage-name">Download<span class="stage-tool">FDA quarterly ZIPs</span></div>
+    <div class="stage-counts"><span class="count">90</span> quarters, 2004Q1–2026Q2</div>
+    <div class="stage-note">FAERS column names changed over the years; all mapped to one set.</div>
+  </li>
+  <li class="stage">
+    <div class="stage-name">Raw<span class="stage-tool">Parquet on R2</span></div>
+    <div class="stage-counts">
+      <span class="count">24.8M</span> reports<br>
+      <span class="count">100.5M</span> drug rows
+      <div class="case-bar"><span style="width: 100%"></span></div>
+    </div>
+    <div class="stage-note">Written once, never modified.</div>
+  </li>
+  <li class="stage">
+    <div class="stage-name">Dedup<span class="stage-tool">Python + DuckDB</span></div>
+    <div class="stage-counts">
+      <span class="count">20.6M</span> cases<br>
+      <span class="count">75.1M</span> drug rows
+      <div class="case-bar"><span style="width: 83%"></span></div>
+    </div>
+    <div class="stage-note">Latest version per case, per FDA rules; FDA-deleted cases removed.</div>
+  </li>
+  <li class="stage">
+    <div class="stage-name">Staging<span class="stage-tool">dbt</span></div>
+    <div class="stage-counts">
+      <span class="count">75.1M</span> drug rows<br>
+      <span class="count">61.3M</span> reaction rows
+    </div>
+    <div class="stage-note">Typed dates and numbers, cleaned drug names kept beside the raw ones (003).</div>
+  </li>
+  <li class="stage">
+    <div class="stage-name">Intermediate<span class="stage-tool">dbt</span></div>
+    <div class="stage-counts">
+      <span class="count">139,460</span> drug names → <span class="count">11,954</span> drugs<br>
+      <span class="count">20.6M</span> cases in the 2×2
+    </div>
+    <div class="stage-note">Names resolved to RxNorm ingredients, contingency counts per pair.</div>
+  </li>
+  <li class="stage">
+    <div class="stage-name">Marts<span class="stage-tool">dbt</span></div>
+    <div class="stage-counts">
+      <span class="count">61.3M</span> fact rows<br>
+      <span class="count">2.85M</span> pairs scored<br>
+      <span class="count">16.1M</span> pair-quarters
+    </div>
+    <div class="stage-note">Star schema plus IC/IC025, with and without lawyer-filed reports.</div>
+  </li>
+  <li class="stage">
+    <div class="stage-name">Serving<span class="stage-tool">DuckDB file</span></div>
+    <div class="stage-counts"><span class="count">0.38 GB</span>, 3 tables</div>
+    <div class="stage-note">Exported from the 10.9 GB warehouse and copied to the server.</div>
+  </li>
+  <li class="stage">
+    <div class="stage-name">Web<span class="stage-tool">FastAPI on Hetzner</span></div>
+    <div class="stage-counts">this site</div>
+    <div class="stage-note">Jinja templates over a read-only connection.</div>
+  </li>
+</ol>
 {% endblock %}
