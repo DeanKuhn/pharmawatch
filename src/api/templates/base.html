@@ -5,63 +5,32 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}PharmaWatch{% endblock %}</title>
-  <style>
-    body {
-      font-family: system-ui, sans-serif;
-      max-width: 960px;
-      margin: 0 auto;
-      padding: 1rem;
-    }
-
-    table {
-      border-collapse: collapse;
-      width: 100%;
-    }
-
-    th, td {
-      text-align: left;
-      padding: 0.3rem 0.6rem;
-      border-bottom: 1px solid #ddd;
-    }
-
-    .stats th { width: 16rem; font-weight: normal; color: #555; }
-
-    .chart { 
-      display: flex; height: 200px; gap: 1px; border-bottom: 1px solid #999; 
-    }
-
-    .slot  { 
-      flex: 1; min-width: 0; height: 100%; display: flex; align-items: flex-end; 
-    }
-
-    .slot:hover { background: #f0f0ee; }
-
-    .col   { 
-      width: 100%; display: flex; flex-direction: column; 
-      gap: 2px; border-radius: 2px 2px 0 0; overflow: hidden; 
-    }
-
-    .lw    { background: #eb6834; }
-
-    .nolw  { background: #2a78d6; }
-
-    .swatch { 
-      display: inline-block; width: 0.8em; 
-      height: 0.8em; border-radius: 2px; 
-      vertical-align: middle; 
-    }
-
-    .axis, .note { 
-      display: flex; justify-content: space-between; font-size: 0.85rem; color: #555; 
-    }
-  </style>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/style.css?v=1">
 </head>
 
 <body>
-  <nav><a href="/">PharmaWatch</a></nav>
-  <main>
+  <header>
+    <nav class="wrap">
+      <a class="brand" href="/">Pharma<span>Watch</span></a>
+      <div class="nav-links">
+        <a href="/">Search</a>
+      </div>
+    </nav>
+  </header>
+
+  <main class="wrap">
     {% block content %}{% endblock %}
   </main>
+
+  <footer>
+    <div class="wrap">
+      <p>Data: FDA Adverse Event Reporting System (FAERS). Reports are voluntary and unverified.</p>
+      <p>Disproportionality signals are not evidence of causation. Not medical advice.</p>
+    </div>
+  </footer>
 </body>
 
 </html>
