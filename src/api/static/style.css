@@ -205,8 +205,37 @@ details { margin-top: 1.5rem; }
 summary { cursor: pointer; color: var(--accent); }
 details table { margin-top: 0.75rem; }
 
+/* methodology stats strip */
+.stat-strip {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
+  gap: 1px;
+  background: var(--border);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.stat {
+  display: flex; flex-direction: column; gap: 0.15rem;
+  padding: 1rem;
+  background: var(--surface);
+}
+
+.stat-num {
+  font-family: var(--mono);
+  font-size: 1.35rem;
+  font-weight: 500;
+  color: var(--accent-strong);
+  font-variant-numeric: tabular-nums;
+}
+
+.stat-label { font-size: 0.9rem; line-height: 1.3; }
+.stat-sub { font-size: 0.8rem; line-height: 1.3; color: var(--muted); }
+
 @media (max-width: 640px) {
   .wrap { padding-inline: 1rem; }
+  .stat-strip { grid-template-columns: 1fr 1fr; }
   h1 { font-size: 1.5rem; }
   main table { display: block; overflow-x: auto; }
   .stats th { width: auto; }
