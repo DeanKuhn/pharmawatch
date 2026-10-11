@@ -27,6 +27,10 @@ models:
                 values: ['matched', 'unmatched']
       - name: n_ingredients
         description: "Number of ingredient identities in the set"
+      - name: n_signals
+        description: "Number of reactions with ic025 > 0 for this drug; 0 if never a primary suspect"
+        tests:
+          - not_null
 
   - name: dim_reaction
     description: "Reaction dimension. One row per unique MedDRA Preferred Term."

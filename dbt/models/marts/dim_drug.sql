@@ -13,6 +13,18 @@ with source as (
 
 ),
 
+signal_counts as (
+
+  select
+    identity_key,
+    count(*) filter (where ic025 > 0) as n_signals
+
+  from {{ ref('mart_signals') }}
+
+  group by identity_key
+
+),
+
 identity_key_group as (
 
   select
@@ -31,9 +43,12 @@ identity_key_group as (
 dim_drug as (
 
   select
-    {{ dbt_utils.generate_surrogate_key(['identity_key']) }} as drug_key, *
+    {{ dbt_utils.generate_surrogate_key(['g.identity_key']) }} as drug_key,
+    g.*,
+    coalesce(c.n_signals, 0) as n_signals
 
-  from identity_key_group
+  from identity_key_group g
+  left join signal_counts c on g.identity_key = c.identity_key
 
 )
 
