@@ -14,8 +14,10 @@ no causation, reporting biases) — caveats are a feature, not a disclaimer.
 openFDA API + FAERS quarterly extracts
   -> raw Parquet zone (immutable, object storage: Cloudflare R2)
   -> DuckDB queries Parquet directly (dedup, typing, drug name normalization; no bulk load)
-  -> dbt-duckdb marts (PRR/ROR disproportionality stats) -> MotherDuck
-  -> FastAPI service (REST + RAG, Postgres/pgvector for embeddings) -> frontend on deanslist.dev
+  -> dbt-duckdb marts (disproportionality stats), built locally -> dbt/pharmawatch_prod.duckdb
+  -> serving tables copied to dbt/pharmawatch_serving.duckdb on the Hetzner box
+  -> FastAPI + Jinja (REST + server-rendered pages) -> pharma.deanslist.dev
+     (post-MVP: RAG, Postgres/pgvector for embeddings)
 ```
 
 Operative constraints:
@@ -26,9 +28,10 @@ Operative constraints:
 - Postgres holds only pgvector embeddings for RAG. Report-level FAERS data is never
   staged into Postgres, at any scale — it's queried live via DuckDB against Parquet on
   R2. See `docs/decisions/0005-report-storage-duckdb-motherduck.md`.
-- dbt marts (PRR/ROR aggregates) are built with `dbt-duckdb` and materialized into
-  MotherDuck, not Postgres. Typing/dedup happen in `schema.py`/`dedup.py` before that
-  build step, not deferred to dbt.
+- dbt marts are built with `dbt-duckdb` into a local DuckDB file, not Postgres. The API
+  reads a copy of the serving tables on the Hetzner box. MotherDuck is a backup target
+  only and isn't on the serving path (see `docs/decisions/014-serve-from-hetzner-duckdb.md`).
+  Typing/dedup happen in `schema.py`/`dedup.py` before that build step, not deferred to dbt.
 - RAG answers join warehouse stats WITH retrieved label chunks. That join is the thesis.
 - Streamlit is an internal sanity-check tool only, never the product.
 
@@ -82,3 +85,29 @@ For the era-boundary column details, use the `faers-schema-eras` skill.
 - `src/faers/r2.py` — R2 credential handling and Parquet I/O (httpfs, upload)
 - `notebooks/01_explore_mess.ipynb`
 - `data/raw/`, `data/parquet/` — gitignored, immutable once written
+
+## Deploy
+
+Live at https://pharma.deanslist.dev on the Hetzner box (ssh alias `port`, user
+`bibba`, repo at `~/pharmawatch`).
+
+```
+browser -> :443 Caddy (TLS, /etc/caddy/Caddyfile) -> 127.0.0.1:8000 uvicorn (systemd: pharmawatch)
+           ufw: 22, 80, 443 only
+```
+
+- `pharmawatch.service` (`/etc/systemd/system/`) runs `.venv/bin/uvicorn api.main:app`
+  from `~/pharmawatch`, restarts on exit, starts at boot. It does not use `uv run`, which
+  would sync the dev groups into the box venv.
+- The Caddyfile is shared with music.deanslist.dev. Append to it, don't overwrite it.
+  Check edits with `caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile`,
+  then `sudo systemctl reload caddy`.
+
+Code update: `git pull`, `uv sync --no-default-groups`, `sudo systemctl restart pharmawatch`.
+
+Data update: rebuild `dbt/pharmawatch_serving.duckdb` locally (`scripts/export_serving.py`),
+rsync it to the box as a `.tmp` file, `mv` it over the old one, then
+`sudo systemctl restart pharmawatch`. The app opens the file read-only once at startup,
+so a new file isn't served until the restart.
+
+Logs: `journalctl -u pharmawatch -n 50` (app), `journalctl -u caddy` (TLS, proxy).

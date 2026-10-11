@@ -30,7 +30,7 @@ open a drug–reaction pair with counts and caveats. Scope: decisions 013, 014.
 - [x] E1 Search page → signal table → pair detail with FAERS caveats, hide peak_quarter_share when a < 10.
 
 ## F — Deploy
-- [ ] F1 Hetzner, pharma.deanslist.dev.
+- [x] F1 Hetzner, pharma.deanslist.dev.
 
 ## v1.1 (deferred, see 013)
 008 salt-list refetch + backtests; step-3 measurement pass; gate decisions (012, 006
