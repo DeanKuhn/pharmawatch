@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+
+{% block content %}
+<h1>Methodology</h1>
+
+<div class="stat-strip">
+  <div class="stat">
+    <span class="stat-num">24.8M</span>
+    <span class="stat-label">raw FAERS reports</span>
+    <span class="stat-sub">4.2M cases removed in dedup</span>
+  </div>
+  <div class="stat">
+    <span class="stat-num">2004–{{ last_quarter.year }}</span>
+    <span class="stat-label">years covered</span>
+    <span class="stat-sub">
+      {{ (last_quarter.year - 2004) * 4 + (last_quarter.month - 1) // 3 + 1 }}
+      quarterly files</span>
+  </div>
+  <div class="stat">
+    <span class="stat-num">8,440</span>
+    <span class="stat-label">drugs resolved to RxNorm</span>
+    <span class="stat-sub">{{ (8440 / 11954 * 100)|round(1) }}% match rate after cleaning</span>
+  </div>
+  <div class="stat">
+    <span class="stat-num">2,947</span>
+    <span class="stat-label">drugs with a signal</span>
+    <span class="stat-sub">IC025 &gt; 0 on at least one reaction</span>
+  </div>
+  <div class="stat">
+    <span class="stat-num">2.85M</span>
+    <span class="stat-label">drug–reaction pairs scored</span>
+    <span class="stat-sub">426K with IC025 &gt; 0</span>
+  </div>
+  <div class="stat">
+    <span class="stat-num">0.38 GB</span>
+    <span class="stat-label">serving database</span>
+    <span class="stat-sub">from a 10.9 GB warehouse</span>
+  </div>
+</div>
+{% endblock %}
