@@ -170,3 +170,11 @@ def details_page(request: Request, drug_key: str, reaction_pt: str):
             "n_pre_2004": n_pre_2004,
         },
     )
+
+@app.get("/methodology")
+def method_page(request: Request):
+    return templates.TemplateResponse(
+        request,
+        "methodology.html",
+        {"last_quarter": LAST_QUARTER}
+    )
