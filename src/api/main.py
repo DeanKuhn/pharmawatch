@@ -46,9 +46,10 @@ def search_drugs(q: str) -> list[dict]:
     cur = con.cursor()
     rows: list[tuple] = cur.execute(
         """
-        select drug_key, drug_label, n_ingredients
+        select drug_key, drug_label, n_ingredients, n_signals
         from dim_drug
         where drug_label ilike ?
+            and n_signals > 0
         order by n_ingredients, drug_label
         limit 20
     """,
@@ -76,6 +77,7 @@ def drug_signals(drug_key: str, limit: int = 50) -> list[dict]:
             pct_lw, peak_quarter, peak_quarter_share
         from mart_signals
         where identity_key = ?
+            and ic025 > 0
         order by ic025 desc
         limit ?
      """,

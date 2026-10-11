@@ -13,11 +13,14 @@
   {% for d in drugs %}
   <li>
     <a href="/drugs/{{ d.drug_key }}">{{ d.drug_label }}</a>
-    {% if d.n_ingredients > 1 %}<small>(combination, {{ d.n_ingredients }} ingredients)</small>{% endif %}
+    {% if d.n_ingredients > 1 %}
+    <small>(combination, {{ d.n_ingredients }} ingredients)</small>
+    {% endif %}
+    <small> → {{ d.n_signals }} signal{{ 's' if d.n_signals != 1 }}</small>
   </li>
   {% endfor %}
 </ul>
 {% elif q %}
-<p>No drugs match "{{ q }}".</p>
+<p>No drugs with signals match "{{ q }}".</p>
 {% endif %}
 {% endblock %}

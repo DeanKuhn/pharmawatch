@@ -32,7 +32,7 @@ body {
   width: 100%;
   max-width: 960px;
   margin: 0 auto;
-  padding: 0 1.5rem;
+  padding-inline: 1.5rem;
 }
 
 a { color: var(--accent); text-decoration: none; }
@@ -206,7 +206,7 @@ summary { cursor: pointer; color: var(--accent); }
 details table { margin-top: 0.75rem; }
 
 @media (max-width: 640px) {
-  .wrap { padding: 0 1rem; }
+  .wrap { padding-inline: 1rem; }
   h1 { font-size: 1.5rem; }
   main table { display: block; overflow-x: auto; }
   .stats th { width: auto; }
