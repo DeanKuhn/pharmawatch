@@ -104,4 +104,169 @@
     <div class="stage-note">Jinja templates over a read-only connection.</div>
   </li>
 </ol>
+
+<h2>dbt</h2>
+<p class="muted">
+  To see dbt lineage and model documentation, 
+  check out the <a href="/static/dbt-docs.html">dbt docs</a>.
+</p>
+
+<h2>Serving schema</h2>
+<p class="muted">
+  The three tables this site reads, copied out of the warehouse into a small DuckDB file.
+  Joined on <code>identity_key</code>, the RxNorm ingredient set that defines a drug.
+  Key columns only, <code>mart_signals</code> has 22 in total.
+</p>
+<div class="diagram">
+  <pre class="mermaid">
+erDiagram
+  dim_drug ||--o{ mart_signals : "identity_key"
+  mart_signals ||--|{ mart_pair_quarters : "identity_key, reaction_pt"
+
+  dim_drug {
+    varchar drug_key PK "surrogate"
+    varchar identity_key UK "sorted RxNorm ingredients"
+    varchar drug_label "most-reported name"
+    bigint n_signals "pairs with ic025 > 0"
+  }
+  mart_signals {
+    varchar identity_key PK, FK
+    varchar reaction_pt PK "MedDRA term"
+    bigint a "2x2 counts a, b, c, d"
+    double ic025 "rank score"
+    double ic025_nolw "without lawyer reports"
+    double pct_lw "lawyer-reported share"
+    date peak_quarter
+  }
+  mart_pair_quarters {
+    varchar identity_key PK, FK
+    varchar reaction_pt PK, FK
+    date report_quarter PK
+    bigint n_cases
+    bigint n_cases_nolw
+  }
+  </pre>
+</div>
+
+<h2>One drug, 390 spellings</h2>
+<p class="muted">
+  Reporters type drug names freely. This is how primary-suspect reports for
+  hydrocodone/acetaminophen collapse into one drug. 
+  All counts were queried and can be produced again.
+</p>
+
+<ol class="trace">
+  <li class="trace-step">
+    <div class="trace-label">Reported name</div>
+    <div class="trace-count"><span class="count">390</span> spellings</div>
+    <ul class="chips">
+      <li>VICODIN</li>
+      <li>NORCO</li>
+      <li>HYDROCODONE + APAP</li>
+      <li>HYDROCODONE BITARTRATE;ACETAMINOPHEN UNK</li>
+      <li>NORCO (UNKNOWN) (WATSON LABORATORIES)</li>
+      <li>LORCET (ACETAMINOPHEN/HYDROCODONE)</li>
+    </ul>
+    <div class="trace-note">…and 384 more.</div>
+  </li>
+  <li class="trace-step">
+    <div class="trace-label">Active ingredients</div>
+    <div class="trace-count"><span class="count">2</span> strings</div>
+    <ul class="chips">
+      <li>ACETAMINOPHEN\HYDROCODONE BITARTRATE</li>
+      <li>ACETAMINOPHEN\HYDROCODONE</li>
+    </ul>
+    <div class="trace-note">
+      FDA fills this field on 86% of these rows. The other 14% (Vicodin, Lortab, …) come
+      from a lookup: a cleaned name that maps to one ingredient string at least 95% of the time.
+    </div>
+  </li>
+  <li class="trace-step">
+    <div class="trace-label">RxNorm ingredient</div>
+    <div class="trace-count"><span class="count">2</span> ingredients</div>
+    <ul class="chips">
+      <li>ACETAMINOPHEN <span class="arrow">→</span> 161</li>
+      <li>HYDROCODONE BITARTRATE <span class="arrow">→</span> 5489</li>
+      <li>HYDROCODONE <span class="arrow">→</span> 5489</li>
+    </ul>
+    <div class="trace-note">
+      Split on <code>\</code>, then each piece is matched through the RxNav API.
+      Salt forms resolve to the base ingredient.
+    </div>
+  </li>
+  <li class="trace-step">
+    <div class="trace-label">Drug</div>
+    <div class="trace-count"><span class="count">1</span> identity</div>
+    <ul class="chips">
+      <li>rxcui:161|rxcui:5489</li>
+    </ul>
+    <div class="trace-note">
+      40,447 primary-suspect reports, 150 signals.
+      <a href="/drugs/2f3a89c7502409f60aadad5e13da4a50">See the drug page</a>.
+    </div>
+  </li>
+</ol>
+
+<h2>From the mess log</h2>
+<p class="muted">
+  Four of the 43 (and more to come) data problems logged while building, 
+  each with a real example.
+  The full list is at <a href="https://github.com/DeanKuhn/pharmawatch/blob/main/docs/mess_log.md">docs/mess_log.md</a>.
+</p>
+
+<div class="mess-grid">
+  <div class="mess-card">
+    <div class="mess-title">Two records on one line</div>
+    <pre class="mess-example">DRUG11Q2.TXT line 322,967
+25 fields, 12-column header</pre>
+    <div class="mess-fix">A missing line break glued two drug records together. The parser
+      splits overlong lines into header-sized chunks.</div>
+  </div>
+  <div class="mess-card">
+    <div class="mess-title">Junk in numeric fields</div>
+    <pre class="mess-example">dose_amt: "554 MILLION", "18-54", "DF"
+age:      "163/6", "N/A"</pre>
+    <div class="mess-fix">Cast with <code>try_cast</code> to null. A bare <code>decimal</code>
+      cast was also silently rounding 0.0005 to 0.001, so doses are stored as double.</div>
+  </div>
+  <div class="mess-card">
+    <div class="mess-title">Pfizer and Moderna merged</div>
+    <pre class="mess-example">TOZINAMERAN (Pfizer)  48,359 rows
+ELASOMERAN (Moderna)  30,651 rows
+→ one RxNorm ingredient</pre>
+    <div class="mess-fix">Both map to the same RxNorm ingredient, so a dbt seed file maps 18 biologic pieces to product-level RxNorm codes instead.</div>
+  </div>
+  <div class="mess-card">
+    <div class="mess-title">One field, several drugs</div>
+    <pre class="mess-example">prod_ai: "AZITHROMYCIN OR METHOTREXATE SODIUM"
+81 strings, 9,638 rows</pre>
+    <div class="mess-fix">FDA lists every candidate when a name is ambiguous. These rows stay
+      in the background counts but are never scored as a drug.</div>
+  </div>
+</div>
+
+<script type="module">
+  import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11.4.1/dist/mermaid.esm.min.mjs";
+  mermaid.initialize({
+    startOnLoad: true,
+    theme: "base",
+    er: { fontSize: 16 },
+    themeVariables: {
+      darkMode: true,
+      background: "#35302b",
+      primaryColor: "#4a4260",
+      primaryTextColor: "#e9e3d8",
+      primaryBorderColor: "#6b5f8a",
+      lineColor: "#a39a8e",
+      attributeBackgroundColorOdd: "#2a2622",
+      attributeBackgroundColorEven: "#312c28",
+      edgeLabelBackground: "#35302b",
+      clusterBkg: "#2a2622",
+      clusterBorder: "#4a433c",
+      titleColor: "#a39a8e",
+      fontFamily: "IBM Plex Sans, system-ui, sans-serif",
+      fontSize: "14px",
+    },
+  });
+</script>
 {% endblock %}
