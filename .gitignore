@@ -25,3 +25,4 @@ docs/mvp_plan.md
 
 *.duckdb
 src/faers/run_pipeline.py
+src/api/static/dbt-docs.html
