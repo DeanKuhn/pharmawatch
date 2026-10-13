@@ -378,11 +378,55 @@ code { font-family: var(--mono); font-size: 0.9em; }
 
 .mess-fix { font-size: 0.85rem; line-height: 1.4; color: var(--muted); }
 
+/* methodology 2x2 worked example */
+.score {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr);
+  gap: 1rem;
+  align-items: start;
+}
+
+.two-by-two td { font-family: var(--mono); }
+.two-by-two tbody th { font-weight: 500; }
+.two-by-two tbody tr:hover { background: none; }
+
+.cell-letter {
+  display: inline-block;
+  width: 1.2rem;
+  margin-right: 0.4rem;
+  color: var(--accent);
+  font-weight: 500;
+}
+
+.calc {
+  display: flex; flex-direction: column; gap: 0.5rem;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.calc li {
+  padding: 0.65rem 1rem;
+  background: var(--surface);
+  border-radius: var(--radius);
+}
+
+.calc-label { font-size: 0.8rem; color: var(--muted); }
+.calc-math { font-family: var(--mono); font-size: 0.85rem; overflow-wrap: anywhere; }
+.calc-math b { color: var(--accent-strong); font-weight: 500; }
+
+.rank-compare th:nth-child(3), .rank-compare th:nth-child(4) { width: 22%; }
+.rank-compare .num { text-align: right; font-family: var(--mono); }
+.rank-compare .case-bar span { min-width: 2px; }
+
+/* methodology lawyer burst */
+.burst-flags { margin: 1rem 0; }
+
 @media (max-width: 640px) {
   .wrap { padding-inline: 1rem; }
   .stat-strip { grid-template-columns: 1fr 1fr; }
   .stage { grid-template-columns: 1fr; gap: 0.35rem; }
-  .trace, .mess-grid { grid-template-columns: 1fr; }
+  .trace, .mess-grid, .score { grid-template-columns: 1fr; }
   .trace-step + .trace-step::before { content: "↓"; left: 50%; top: -1.3rem; }
   h1 { font-size: 1.5rem; }
   main table { display: block; overflow-x: auto; }

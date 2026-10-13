@@ -136,11 +136,28 @@ def details_page(request: Request, drug_key: str, reaction_pt: str):
     _, drug_label = _drug_lookup(con.cursor(), drug_key)
     detail = signal_detail(drug_key, reaction_pt)
 
-    by_quarter = {q["report_quarter"]: q for q in detail["quarters"]}
     n_pre_2004 = sum(
         q["n_cases"] for q in detail["quarters"] if q["report_quarter"].year < 2004
     )
+    quarters, max_n = _quarter_series(detail["quarters"])
 
+    return templates.TemplateResponse(
+        request,
+        "detail.html",
+        {
+            "drug_key": drug_key,
+            "drug_label": drug_label,
+            "s": detail["signal"],
+            "quarters": quarters,
+            "max_n": max_n,
+            "n_pre_2004": n_pre_2004,
+        },
+    )
+
+
+def _quarter_series(rows: list[dict]) -> tuple[list[dict], int]:
+    """Fill every quarter from 2004 Q1 to LAST_QUARTER, zero where a pair had no cases."""
+    by_quarter = {q["report_quarter"]: q for q in rows}
     quarters = []
     year, month = 2004, 1
     while date(year, month, 1) <= LAST_QUARTER:
@@ -157,24 +174,27 @@ def details_page(request: Request, drug_key: str, reaction_pt: str):
         if month > 12:
             year, month = year + 1, 1
     max_n = max(q["n"] for q in quarters) or 1
+    return quarters, max_n
 
-    return templates.TemplateResponse(
-        request,
-        "detail.html",
-        {
-            "drug_key": drug_key,
-            "drug_label": drug_label,
-            "s": detail["signal"],
-            "quarters": quarters,
-            "max_n": max_n,
-            "n_pre_2004": n_pre_2004,
-        },
-    )
+
+# ranitidine → prostate cancer, the lawyer-burst example on /methodology
+BURST_DRUG = "c09036bcbf72a13c997c5be9c68aa167"
+BURST_REACTION = "PROSTATE CANCER"
+
 
 @app.get("/methodology")
 def method_page(request: Request):
+    burst = signal_detail(BURST_DRUG, BURST_REACTION)
+    quarters, max_n = _quarter_series(burst["quarters"])
     return templates.TemplateResponse(
         request,
         "methodology.html",
-        {"last_quarter": LAST_QUARTER}
+        {
+            "last_quarter": LAST_QUARTER,
+            "burst": burst["signal"],
+            "burst_drug": BURST_DRUG,
+            "burst_reaction": BURST_REACTION,
+            "quarters": quarters,
+            "max_n": max_n,
+        },
     )

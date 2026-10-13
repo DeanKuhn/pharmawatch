@@ -245,6 +245,117 @@ ELASOMERAN (Moderna)  30,651 rows
   </div>
 </div>
 
+<h2>Scoring one pair</h2>
+<p class="muted">
+  Every drug–reaction pair gets a 2×2 table of case counts over all 20.6M cases.
+  Same drug as above, its top signal: dependence.
+</p>
+
+<div class="score">
+  <table class="two-by-two">
+    <thead>
+      <tr><th></th><th>dependence</th><th>other reactions</th></tr>
+    </thead>
+    <tbody>
+      <tr><th>hydrocodone/APAP</th><td><span class="cell-letter">a</span>20,775</td><td><span class="cell-letter">b</span>19,668</td></tr>
+      <tr><th>other drugs</th><td><span class="cell-letter">c</span>34,035</td><td><span class="cell-letter">d</span>20,510,241</td></tr>
+    </tbody>
+  </table>
+
+  <ol class="calc">
+    <li>
+      <div class="calc-label">Expected, if drug and reaction were unrelated</div>
+      <div class="calc-math">(a+b)(a+c) / N = 40,443 × 54,810 / 20,584,719 = <b>107.7</b></div>
+    </li>
+    <li>
+      <div class="calc-label">IC: how many times more often than expected, in log₂</div>
+      <div class="calc-math">log₂((a+0.5) / (expected+0.5)) = log₂(20,775.5 / 108.2) = <b>7.585</b></div>
+    </li>
+    <li>
+      <div class="calc-label">IC025: lower bound of the 95% credibility interval</div>
+      <div class="calc-math">IC − 3.3(a+0.5)<sup>−1/2</sup> − 2(a+0.5)<sup>−3/2</sup> = 7.585 − 0.023 = <b>7.562</b></div>
+    </li>
+  </ol>
+</div>
+
+<h3>Why rank by IC025, not PRR</h3>
+<p class="muted">
+  The original signal calculation, a method called PRR, is a ratio, and small counts explode it. The +0.5 in IC pulls small pairs towards zero, so with only 3 cases, IC can never exceed ~2.8.
+</p>
+
+<table class="rank-compare">
+  <thead>
+    <tr><th>Pair</th><th class="num">Cases</th><th>PRR</th><th>IC025</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Hylan G-F 20 → injection site joint effusion</td>
+      <td class="num">3</td>
+      <td><span class="count">1,715,392</span><div class="case-bar"><span style="width: 100%"></span></div></td>
+      <td><span class="count">0.74</span><div class="case-bar"><span style="width: 9.8%"></span></div></td>
+    </tr>
+    <tr>
+      <td>Hydrocodone/APAP → dependence</td>
+      <td class="num">20,775</td>
+      <td><span class="count">310</span><div class="case-bar"><span style="width: 0.02%"></span></div></td>
+      <td><span class="count">7.56</span><div class="case-bar"><span style="width: 100%"></span></div></td>
+    </tr>
+  </tbody>
+</table>
+
+<h2>Lawyer bursts</h2>
+<p class="muted">
+  Litigation floods FAERS with real but stimulated reports. Ranitidine was recalled in
+  2019–2020 over a possible carcinogen, and cancer reports followed the lawsuits.
+  These are flagged, not dropped.
+</p>
+
+<p>
+  <span class="swatch nolw"></span> Other reporters &nbsp;
+  <span class="swatch lw"></span> Lawyer-reported
+</p>
+<div class="chart">
+  {% for q in quarters %}
+  <div class="slot" title="{{ q.label }}: {{ q.n }} cases ({{ q.n_lw }} lawyer-reported)">
+    <div class="col" style="height: {{ 100 * q.n / max_n }}%">
+      {% if q.n_lw %}<div class="lw" style="flex-grow: {{ q.n_lw }}"></div>{% endif %}
+      {% if q.n_nolw %}<div class="nolw" style="flex-grow: {{ q.n_nolw }}"></div>{% endif %}
+    </div>
+  </div>
+  {% endfor %}
+</div>
+<div class="axis"><span>{{ quarters[0].label }}</span><span>{{ quarters[-1].label }}</span></div>
+
+<div class="stat-strip burst-flags">
+  <div class="stat">
+    <span class="stat-num">{{ "{:,}".format(burst.a) }}</span>
+    <span class="stat-label">ranitidine → prostate cancer cases</span>
+  </div>
+  <div class="stat">
+    <span class="stat-num">{{ (burst.pct_lw * 100) | round | int }}%</span>
+    <span class="stat-label">lawyer-reported</span>
+    <span class="stat-sub"><code>pct_lw</code></span>
+  </div>
+  <div class="stat">
+    <span class="stat-num">{{ (burst.peak_quarter_share * 100) | round | int }}%</span>
+    <span class="stat-label">in one quarter ({{ burst.peak_quarter.year }} Q{{ (burst.peak_quarter.month + 2) // 3 }})</span>
+    <span class="stat-sub"><code>peak_quarter_share</code></span>
+  </div>
+  <div class="stat">
+    <span class="stat-num">{{ burst.ic025 | round(2) }} → {{ burst.ic025_nolw | round(2) }}</span>
+    <span class="stat-label">IC025 without lawyer reports</span>
+    <span class="stat-sub"><code>ic025_nolw</code></span>
+  </div>
+</div>
+
+<p class="muted">
+  Removing lawyer reports doesn't erase this signal: other reporters surged too, and lawyer
+  reports also inflated ranitidine's total, which raised the expected count. That's why
+  burstiness is a separate flag. Other pairs do flip: ranitidine → incorrect dose
+  administered is 80% lawyer-reported and drops from 1.04 to −0.43.
+  <a href="/drugs/{{ burst_drug }}/signals/{{ burst_reaction | urlencode }}">See the pair page</a>.
+</p>
+
 <script type="module">
   import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11.4.1/dist/mermaid.esm.min.mjs";
   mermaid.initialize({
