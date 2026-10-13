@@ -155,7 +155,7 @@ def details_page(request: Request, drug_key: str, reaction_pt: str):
     )
 
 
-def _quarter_series(rows: list[dict]) -> tuple[list[dict], int]:
+def _quarter_series(rows: list[dict]):
     """Fill every quarter from 2004 Q1 to LAST_QUARTER, zero where a pair had no cases."""
     by_quarter = {q["report_quarter"]: q for q in rows}
     quarters = []
