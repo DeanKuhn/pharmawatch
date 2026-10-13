@@ -82,7 +82,6 @@ For the era-boundary column details, use the `faers-schema-eras` skill.
 ## Layout
 
 - `src/faers/` — ingestion pipeline, each stage run as `python -m faers.<stage>`
-  (`run_pipeline.py` is an unfinished single-command runner)
   - `download.py` — fetch quarterly extracts + API samples
   - `parse.py` — extract files -> Parquet (raw, per-era column names, unmodified)
   - `schema.py` — per-era column crosswalk to one canonical schema

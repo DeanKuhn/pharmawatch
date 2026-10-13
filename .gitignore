@@ -24,3 +24,4 @@ docs/pharmawatch_sprint_brief.md
 docs/mvp_plan.md
 
 *.duckdb
+src/faers/run_pipeline.py
