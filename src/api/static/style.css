@@ -285,10 +285,105 @@ details table { margin-top: 0.75rem; }
 
 .case-bar span { display: block; height: 100%; background: var(--accent); }
 
+/* methodology diagrams (Mermaid) */
+.diagram {
+  padding: 1rem;
+  background: var(--surface);
+  border-radius: var(--radius);
+  overflow-x: auto;
+}
+
+.diagram pre { margin: 0; }
+.diagram svg { display: block; margin-inline: auto; }
+.mermaid:not([data-processed]) { visibility: hidden; }
+
+code { font-family: var(--mono); font-size: 0.9em; }
+
+/* methodology cleaning trace */
+.trace {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 1.5rem;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.trace-step {
+  position: relative;
+  display: flex; flex-direction: column; gap: 0.5rem;
+  padding: 0.85rem 1rem;
+  background: var(--surface);
+  border-radius: var(--radius);
+  font-size: 0.9rem;
+}
+
+.trace-step + .trace-step::before {
+  content: "→";
+  position: absolute;
+  left: -1.2rem; top: 1rem;
+  color: var(--accent);
+}
+
+.trace-label { font-weight: 500; }
+.trace-count { color: var(--muted); }
+.trace-note { font-size: 0.8rem; line-height: 1.4; color: var(--muted); }
+
+.chips {
+  display: flex; flex-direction: column; gap: 0.3rem;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.chips li {
+  padding: 0.2rem 0.45rem;
+  background: var(--bg);
+  border-radius: 4px;
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  overflow-wrap: anywhere;
+}
+
+.arrow { color: var(--accent); }
+
+/* methodology mess log gallery */
+.mess-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 0.75rem;
+}
+
+.mess-card {
+  display: flex; flex-direction: column; gap: 0.5rem;
+  padding: 0.85rem 1rem;
+  background: var(--surface);
+  border-radius: var(--radius);
+  font-size: 0.9rem;
+}
+
+.mess-title { font-weight: 500; }
+
+.mess-example {
+  margin: 0;
+  padding: 0.5rem 0.65rem;
+  background: var(--bg);
+  border-left: 2px solid var(--lw);
+  border-radius: 4px;
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.mess-fix { font-size: 0.85rem; line-height: 1.4; color: var(--muted); }
+
 @media (max-width: 640px) {
   .wrap { padding-inline: 1rem; }
   .stat-strip { grid-template-columns: 1fr 1fr; }
   .stage { grid-template-columns: 1fr; gap: 0.35rem; }
+  .trace, .mess-grid { grid-template-columns: 1fr; }
+  .trace-step + .trace-step::before { content: "↓"; left: 50%; top: -1.3rem; }
   h1 { font-size: 1.5rem; }
   main table { display: block; overflow-x: auto; }
   .stats th { width: auto; }
