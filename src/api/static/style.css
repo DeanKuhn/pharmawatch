@@ -633,6 +633,22 @@ code {
     padding-inline: 1rem;
   }
 
+  .brand {
+    font-size: 1rem;
+  }
+
+  .nav-links {
+    gap: 1rem;
+  }
+
+  .nav-links a {
+    font-size: 0.875rem;
+  }
+
+  .hide-mobile {
+    display: none;
+  }
+
   .stat-strip {
     grid-template-columns: 1fr 1fr;
   }
