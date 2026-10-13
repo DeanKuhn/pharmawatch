@@ -1,7 +1,7 @@
 [project]
 name = "pharmawatch"
 version = "0.1.0"
-description = "Add your description here"
+description = "Drug safety signal detection over FDA adverse event reports (FAERS): pipeline, dbt warehouse, and web app."
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
@@ -13,7 +13,6 @@ dependencies = [
 
 [dependency-groups]
 pipeline = [
-    "adbc-driver-postgresql>=1.11.0",
     "httpx>=0.28.1",
     "polars>=1.42.1",
     "pyarrow>=25.0.0",
@@ -21,7 +20,6 @@ pipeline = [
 ]
 dev = [
     "dbt-duckdb>=1.10.1",
-    "pytest>=9.1.1",
 ]
 
 [tool.uv]
@@ -33,9 +31,6 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/faers", "src/api"]
-
-[tool.pytest.ini_options]
-pythonpath = ["src", "scripts"]
 
 [tool.pyright]
 typeCheckingMode = "basic"
