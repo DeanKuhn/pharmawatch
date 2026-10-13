@@ -1,7 +1,14 @@
 {% extends "base.html" %}
 
 {% block content %}
-<h1>Search drugs</h1>
+<h1>Find a drug's safety signals</h1>
+
+<p class="muted">
+  PharmaWatch scans millions of FDA adverse event reports (FAERS) for
+  drug–reaction pairs that are reported more often than expected. Search a
+  drug to see which reactions stand out, and how strongly.
+  <a href="/methodology">How signals are computed →</a>
+</p>
 
 <form method="get" action="/">
   <input type="search" name="q" value="{{ q or '' }}" placeholder="e.g. ranitidine" autofocus>
