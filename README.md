@@ -81,6 +81,8 @@ cp dbt/profiles.example.yml dbt/profiles.yml
 uv run python -m faers.<stage>                 # each pipeline stage runs standalone
 cd dbt && uv run dbt deps && uv run dbt build --target prod && cd ..
 uv run python scripts/export_serving.py        # -> dbt/pharmawatch_serving.duckdb
+cd dbt && uv run dbt docs generate --static && cd ..   # optional: dbt docs page
+cp dbt/target/static_index.html src/api/static/dbt-docs.html
 uv run uvicorn api.main:app                    # http://127.0.0.1:8000
 ```
 
