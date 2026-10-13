@@ -29,7 +29,7 @@
   <div class="stat">
     <span class="stat-num">2.85M</span>
     <span class="stat-label">drug–reaction pairs scored</span>
-    <span class="stat-sub">426K with IC025 &gt; 0</span>
+    <span class="stat-sub">426K with IC025 > 0, ~{{ (426 / 2850 * 100)|round(1) }}%</span>
   </div>
   <div class="stat">
     <span class="stat-num">0.38 GB</span>
@@ -40,15 +40,14 @@
 
 <h2>Pipeline</h2>
 <p class="muted">
-  Each stage with real row counts. Units change along the way (reports, cases, drug rows,
-  pairs), so the bars track only the dedup drop: distinct cases as a share of raw reports.
+  Each stage with row counts.
 </p>
 
 <ol class="pipeline">
   <li class="stage">
     <div class="stage-name">Download<span class="stage-tool">FDA quarterly ZIPs</span></div>
     <div class="stage-counts"><span class="count">90</span> quarters, 2004Q1–2026Q2</div>
-    <div class="stage-note">FAERS column names changed over the years; all mapped to one set.</div>
+    <div class="stage-note">FAERS column names changed over the years, all mapped to one set.</div>
   </li>
   <li class="stage">
     <div class="stage-name">Raw<span class="stage-tool">Parquet on R2</span></div>
@@ -66,7 +65,7 @@
       <span class="count">75.1M</span> drug rows
       <div class="case-bar"><span style="width: 83%"></span></div>
     </div>
-    <div class="stage-note">Latest version per case, per FDA rules; FDA-deleted cases removed.</div>
+    <div class="stage-note">Latest version per case, FDA-deleted cases removed.</div>
   </li>
   <li class="stage">
     <div class="stage-name">Staging<span class="stage-tool">dbt</span></div>
@@ -74,7 +73,9 @@
       <span class="count">75.1M</span> drug rows<br>
       <span class="count">61.3M</span> reaction rows
     </div>
-    <div class="stage-note">Typed dates and numbers, cleaned drug names kept beside the raw ones (003).</div>
+    <div class="stage-note">
+      Typed dates and numbers, cleaned drug names kept beside the raw ones.
+    </div>
   </li>
   <li class="stage">
     <div class="stage-name">Intermediate<span class="stage-tool">dbt</span></div>
@@ -115,7 +116,7 @@
 <p class="muted">
   The three tables this site reads, copied out of the warehouse into a small DuckDB file.
   Joined on <code>identity_key</code>, the RxNorm ingredient set that defines a drug.
-  Key columns only, <code>mart_signals</code> has 22 in total.
+  Doesn't show all columns.
 </p>
 <div class="diagram">
   <pre class="mermaid">
@@ -152,7 +153,6 @@ erDiagram
 <p class="muted">
   Reporters type drug names freely. This is how primary-suspect reports for
   hydrocodone/acetaminophen collapse into one drug. 
-  All counts were queried and can be produced again.
 </p>
 
 <ol class="trace">
@@ -178,7 +178,7 @@ erDiagram
     </ul>
     <div class="trace-note">
       FDA fills this field on 86% of these rows. The other 14% (Vicodin, Lortab, …) come
-      from a lookup: a cleaned name that maps to one ingredient string at least 95% of the time.
+      from a lookup: a cleaned name that maps to one ingredient string ~95% of the time.
     </div>
   </li>
   <li class="trace-step">
@@ -219,8 +219,8 @@ erDiagram
     <div class="mess-title">Two records on one line</div>
     <pre class="mess-example">DRUG11Q2.TXT line 322,967
 25 fields, 12-column header</pre>
-    <div class="mess-fix">A missing line break glued two drug records together. The parser
-      splits overlong lines into header-sized chunks.</div>
+    <div class="mess-fix">A missing line break put two drug records into one line. The parser
+      splits these oversized lines into header-sized chunks.</div>
   </div>
   <div class="mess-card">
     <div class="mess-title">Junk in numeric fields</div>
@@ -268,7 +268,7 @@ ELASOMERAN (Moderna)  30,651 rows
       <div class="calc-math">(a+b)(a+c) / N = 40,443 × 54,810 / 20,584,719 = <b>107.7</b></div>
     </li>
     <li>
-      <div class="calc-label">IC: how many times more often than expected, in log₂</div>
+      <div class="calc-label">IC (Information Component): how many times more often than expected, in log₂</div>
       <div class="calc-math">log₂((a+0.5) / (expected+0.5)) = log₂(20,775.5 / 108.2) = <b>7.585</b></div>
     </li>
     <li>
@@ -280,7 +280,7 @@ ELASOMERAN (Moderna)  30,651 rows
 
 <h3>Why rank by IC025, not PRR</h3>
 <p class="muted">
-  The original signal calculation, a method called PRR, is a ratio, and small counts explode it. The +0.5 in IC pulls small pairs towards zero, so with only 3 cases, IC can never exceed ~2.8.
+  The original signal calculation, PRR, is a ratio, and small counts explode it. The +0.5 in IC pulls small pairs towards zero, so with only 3 cases, IC can never exceed ~2.8.
 </p>
 
 <table class="rank-compare">
@@ -349,11 +349,9 @@ ELASOMERAN (Moderna)  30,651 rows
 </div>
 
 <p class="muted">
-  Removing lawyer reports doesn't erase this signal: other reporters surged too, and lawyer
-  reports also inflated ranitidine's total, which raised the expected count. That's why
-  burstiness is a separate flag. Other pairs do flip: ranitidine → incorrect dose
-  administered is 80% lawyer-reported and drops from 1.04 to −0.43.
-  <a href="/drugs/{{ burst_drug }}/signals/{{ burst_reaction | urlencode }}">See the pair page</a>.
+  The prostate cancer signal holds up even without lawyer reports 
+  (IC025 with: 5.22, IC025 without: 5.75). However, not every pair holds up. Ranitidine → incorrect dose administered is 80% lawyer-reported. The IC025 drops from 1.04 with lawyers to -0.41 without.  
+  <a href="/drugs/{{ burst_drug }}/signals/{{ burst_reaction | urlencode }}">See the ranitidine → prostate cancer page</a>
 </p>
 
 <script type="module">
