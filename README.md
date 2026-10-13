@@ -1,58 +1,100 @@
+<div align="center">
+
 # PharmaWatch
 
-Drug safety signal platform over the entire FAERS quarterly report catalog. Detects disproportionate reporting between drugs, reactions, and demographics using PRR and ROR. Built for clinicians, health journalists, and analysts.
+**Drug safety signals from every FDA adverse event report since 2004.**
+
+[**Live site**](https://pharma.deanslist.dev) · [Methodology](https://pharma.deanslist.dev/methodology) · [dbt docs](https://pharma.deanslist.dev/static/dbt-docs.html)
+
+![Python](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)
+![DuckDB](https://img.shields.io/badge/DuckDB-FFF000?logo=duckdb&logoColor=black)
+![dbt](https://img.shields.io/badge/dbt-FF694B?logo=dbt&logoColor=white)
+![FastAPI](https://img.shields.io/badge/FastAPI-009688?logo=fastapi&logoColor=white)
+![Cloudflare R2](https://img.shields.io/badge/Cloudflare_R2-F38020?logo=cloudflare&logoColor=white)
+![License: MIT](https://img.shields.io/badge/License-MIT-blue)
+
+</div>
+
+Search a drug, see which adverse reactions are reported unusually often for it, and open
+any drug–reaction pair for its counts, a quarterly reporting chart, and the caveats that
+come with FAERS data. Built for clinicians, health journalists, and analysts.
+
+| 24.8M | 20.6M | 139,460 → 11,954 | 2.85M |
+|:---:|:---:|:---:|:---:|
+| raw reports | cases after dedup | drug-name spellings → drugs | drug–reaction pairs scored |
+
+<details>
+<summary><b>Screenshot</b></summary>
+<br>
+<img src="docs/img/detail.png" alt="Pair detail page: ranitidine and colorectal cancer, with lawyer-reported cases highlighted in the quarterly chart" width="700">
+</details>
 
 ## Architecture
 
+```mermaid
+flowchart LR
+    A[FAERS quarterly<br>extracts] --> B[Python pipeline<br>parse · dedup · validate]
+    B --> C[(Parquet on<br>Cloudflare R2)]
+    C --> D[dbt-duckdb<br>identity · star schema · signals]
+    E[RxNav API] --> D
+    D --> F[(Serving DuckDB<br>on Hetzner)]
+    F --> G[FastAPI + Jinja<br>pharma.deanslist.dev]
 ```
-openFDA quarterly extracts
-  → raw Parquet (immutable, Cloudflare R2)
-  → DuckDB (dedup, typing, drug name normalization)
-  → dbt-duckdb marts (PRR/ROR) → MotherDuck
-  → FastAPI + RAG (planned)
-```
 
-## Ingestion pipeline
+## The hard parts
 
-Seven standalone modules run in sequence, each reading the previous stage's output:
+- **20 years of schema drift.** FAERS changed file names, column layouts, and delimiters
+  several times, with broken rows along the way. The pipeline maps every era to one
+  schema and keeps only the latest version of each case. Every defect found is in the
+  [mess log](docs/mess_log.md) (43 entries and counting).
+- **One drug, 390 spellings.** Drug names are free text. Each one is resolved to its set of
+  RxNorm ingredients, so brands, generics, salt forms, and typos collapse to one drug.
+- **Honest ranking.** PRR and ROR blow up on small counts, so signals are ranked by IC025,
+  a shrunk lower bound that rewards evidence over ratio.
+- **Lawyer bursts.** Litigation floods (ranitidine, 2021) inflate counts. They're
+  flagged, not dropped: each pair shows its lawyer-reported share, peak-quarter share, and
+  a score recomputed without lawyer reports.
 
-| Module | What it does |
+The [methodology page](https://pharma.deanslist.dev/methodology) walks through each of
+these with real numbers. Design choices are recorded in [docs/decisions](docs/decisions/).
+
+## Repo tour
+
+| Path | What's there |
 |---|---|
-| `download.py` | Fetches quarterly ZIP extracts from openFDA |
-| `parse.py` | Extracts raw `$`-delimited text files into Parquet, handling FAERS formatting defects |
-| `schema.py` | Maps each era's column names to one canonical schema (FAERS changed layouts multiple times) |
-| `clean.py` | Applies canonical renames, removes null/deleted caseids, deduplicates rows within a quarter |
-| `merge.py` | Unions all quarters per table into single Parquet files |
-| `dedup.py` | Case-version deduplication across all quarters — keeps only the latest version of each case |
-| `validate.py` | Reconciliation gate: five invariants that must pass before data leaves the pipeline |
-| `load.py` | Uploads deduped Parquet to R2 as the canonical source of truth |
+| [`src/faers/`](src/faers/) | Ingestion: download, parse, schema crosswalk, clean, merge, dedup, validate, load to R2 |
+| [`dbt/`](dbt/) | Staging, drug identity, star schema, PRR / ROR / IC signal marts, tests |
+| [`scripts/`](scripts/) | RxNav fetchers, export of serving tables |
+| [`src/api/`](src/api/) | FastAPI app and Jinja templates behind the live site |
+| [`docs/`](docs/) | [Architecture](docs/structure.md), [star schema](docs/star_schema.md), [decisions](docs/decisions/), [mess log](docs/mess_log.md) |
 
-## dbt
-
-Star schema built with `dbt-duckdb`, materialized into MotherDuck. For detailed schema layout and design rationale, see [docs/star_schema.md](docs/star_schema.md).
-
-Dimension tables cover drugs (name, route), reactions (preferred term), and demographics (age group, sex, reporter country). Outcomes are **not** a dimension — because a single case can have multiple outcomes (e.g. both hospitalization and death), they are pivoted into boolean flags directly on the fact table (`has_death`, `has_hospitalization`, etc.) rather than joined through a foreign key.
-
-The fact table grain is one row per (case, drug, reaction) triple. This isolates each drug-reaction pair for direct use by the PRR and ROR signal detection marts.
-
-## Setup
+<details>
+<summary><b>Running it locally</b></summary>
 
 Requires Python 3.12+ and [uv](https://docs.astral.sh/uv/).
 
 ```bash
 uv sync
-cp .env.example .env  # fill in R2 credentials and MotherDuck token
+cp .env.example .env                           # R2 credentials (pipeline only)
+cp dbt/profiles.example.yml dbt/profiles.yml
+
+uv run python -m faers.<stage>                 # each pipeline stage runs standalone
+cd dbt && uv run dbt deps && uv run dbt build --target prod && cd ..
+uv run python scripts/export_serving.py        # -> dbt/pharmawatch_serving.duckdb
+uv run uvicorn api.main:app                    # http://127.0.0.1:8000
 ```
 
-## Roadmap
+</details>
 
-**Planned.** Drug names in FAERS are free-text and wildly inconsistent. Normalization against a medical ontology (RxNorm or similar) is next, along with the same treatment for reaction terms. A frontend will give analysts and journalists live query access to the warehouse without writing SQL.
+## Limitations
 
-**Exploring.** A FastAPI service layer, RAG combining warehouse stats with drug label text (pgvector), and ML-based signal detection are under consideration.
+FAERS reports are voluntary and unverified. A signal means "reported unusually often",
+not "caused by", and FAERS has no denominator, so nothing here is a rate or a risk. Drug
+matching is good but not perfect; known residual errors are listed in
+[decision 013](docs/decisions/013-mvp-scope.md).
 
-## Data quality
-
-FAERS data has extensive formatting inconsistencies across its 20+ year history — schema changes, delimiter bugs, embedded characters, partial-precision dates, and more. All documented issues are tracked in [docs/mess_log.md](docs/mess_log.md).
+**Next (v1.1):** finish drug-name normalization, EBGM scoring, change-point detection for
+reporting bursts, and plain-English questions over drug labels (RAG).
 
 ## License
 
