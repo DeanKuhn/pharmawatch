@@ -1,0 +1,24 @@
+# Copy to profiles.yml (gitignored) and run dbt from dbt/.
+pharmawatch:
+  target: dev
+  outputs:
+    # Default: local working build
+    dev:
+      type: duckdb
+      path: "pharmawatch_dev.duckdb"
+      threads: 4
+    # MVP build; scripts/export_serving.py exports the serving file from it
+    prod:
+      type: duckdb
+      path: "pharmawatch_prod.duckdb"
+      threads: 4
+    # Backup only; needs MOTHERDUCK_TOKEN in the environment
+    motherduck:
+      type: duckdb
+      path: "md:pharmawatch"
+      threads: 4
+    # In-memory, for `dbt build --empty` dry runs
+    check:
+      type: duckdb
+      path: ":memory:"
+      threads: 4
