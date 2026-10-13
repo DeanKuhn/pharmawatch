@@ -102,7 +102,7 @@ For the era-boundary column details, use the `faers-schema-eras` skill.
   - `models/marts/` — star schema, `mart_prr`, `mart_ror`, `mart_signals`,
     `mart_pair_quarters`
   - `macros/`, `seeds/` (biologic split map), `tests/`, `analyses/` (sizing queries)
-- `src/api/` — FastAPI app (`main.py`), Jinja `templates/`, `static/` (CSS, dbt docs)
+- `src/api/` — FastAPI app (`main.py`), Jinja `templates/`, `static/` (CSS, dbt docs; the docs file is untracked, see Deploy)
 - `docs/` — `decisions/` (ADRs), `mess_log.md`, `star_schema.md`, this file
 - `data/` — gitignored; landed data is immutable once written
 
@@ -129,5 +129,10 @@ Data update: rebuild `dbt/pharmawatch_serving.duckdb` locally (`scripts/export_s
 rsync it to the box as a `.tmp` file, `mv` it over the old one, then
 `sudo systemctl restart pharmawatch`. The app opens the file read-only once at startup,
 so a new file isn't served until the restart.
+
+dbt docs: `src/api/static/dbt-docs.html` is generated and untracked. Build it locally
+(`dbt docs generate --static`, then copy `dbt/target/static_index.html` to that path),
+rsync it to the box as a `.tmp` file, and `mv` it into place. Static files are read per
+request, so no restart is needed. A fresh clone has no docs page until this is done.
 
 Logs: `journalctl -u pharmawatch -n 50` (app), `journalctl -u caddy` (TLS, proxy).
