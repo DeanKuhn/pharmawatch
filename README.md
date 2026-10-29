@@ -4,12 +4,13 @@
 
 **Drug safety signals from every FDA adverse event report since 2004.**
 
-[**Live site**](https://pharma.deanslist.dev) · [Methodology](https://pharma.deanslist.dev/methodology) · [dbt docs](https://pharma.deanslist.dev/static/dbt-docs.html)
+[**Live site**](https://pharma.deanslist.dev) · [Methodology](https://pharma.deanslist.dev/methodology) · [dbt docs](https://pharma.deanslist.dev/static/dbt-docs.html) · [Power BI report](https://app.powerbi.com/view?r=eyJrIjoiMTNhZjAwOGItY2VjNC00NDExLTg3ODktOGZiYjE2ZDNiNGRmIiwidCI6ImY4NjQ4NjU0LWY1MWEtNDBjZC1hMGEwLTc5NzFiMWFhNmVkMiJ9)
 
 ![Python](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)
 ![DuckDB](https://img.shields.io/badge/DuckDB-FFF000?logo=duckdb&logoColor=black)
 ![dbt](https://img.shields.io/badge/dbt-FF694B?logo=dbt&logoColor=white)
 ![FastAPI](https://img.shields.io/badge/FastAPI-009688?logo=fastapi&logoColor=white)
+![Power BI](https://img.shields.io/badge/Power_BI-F2C811?logo=powerbi&logoColor=black)
 ![Cloudflare R2](https://img.shields.io/badge/Cloudflare_R2-F38020?logo=cloudflare&logoColor=white)
 ![License: MIT](https://img.shields.io/badge/License-MIT-blue)
 
@@ -24,9 +25,17 @@ come with FAERS data. Built for clinicians, health journalists, and analysts.
 | raw reports | cases after dedup | drug-name spellings → drugs | drug–reaction pairs scored |
 
 <details>
-<summary><b>Screenshot</b></summary>
+<summary><b>Screenshot: live site</b></summary>
 <br>
 <img src="docs/img/detail.png" alt="Pair detail page: ranitidine and colorectal cancer, with lawyer-reported cases highlighted in the quarterly chart" width="700">
+</details>
+
+<details>
+<summary><b>Screenshot: Power BI report</b></summary>
+<br>
+<a href="https://app.powerbi.com/view?r=eyJrIjoiMTNhZjAwOGItY2VjNC00NDExLTg3ODktOGZiYjE2ZDNiNGRmIiwidCI6ImY4NjQ4NjU0LWY1MWEtNDBjZC1hMGEwLTc5NzFiMWFhNmVkMiJ9"><img src="docs/img/report.png" alt="Power BI Overview page: KPI cards, top drivers of lawyer-filed reports in 2021-22, and lawyer-filed vs other reports by quarter" width="700"></a>
+<br>
+Four pages over the serving layer: Overview, Drug explorer, Litigation lens, and Why IC025.
 </details>
 
 ## Architecture
